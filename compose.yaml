@@ -1,0 +1,92 @@
+name: portal-cgnat
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: containers/app/Containerfile
+    target: development
+    args:
+      PHP_VERSION: 8.5.9
+      COMPOSER_VERSION: 2.10.2
+      NODE_VERSION: 24.18.0
+      PHPREDIS_VERSION: 6.3.0
+  image: localhost/portal-cgnat/runtime:0.1.0
+  env_file:
+    - .env
+  environment:
+    APP_URL: http://localhost:8080
+    APP_MAINTENANCE_STORE: file
+    QUEUE_FAILED_DRIVER: "null"
+    CACHE_STORE: redis
+    SESSION_DRIVER: redis
+    QUEUE_CONNECTION: redis
+    REDIS_CLIENT: phpredis
+    REDIS_HOST: portal-redis
+    REDIS_PORT: 6379
+  volumes:
+    - ./:/var/www/html
+    - portal-storage:/var/www/html/storage
+    - portal-bootstrap-cache:/var/www/html/bootstrap/cache
+  networks:
+    - portal-cgnat
+  depends_on:
+    portal-redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  portal-redis:
+    image: redis:8.10.0
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - portal-redis:/data
+    networks:
+      - portal-cgnat
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  portal-app:
+    <<: *app
+    container_name: portal-app
+
+  portal-worker:
+    <<: *app
+    container_name: portal-worker
+    command: ["php", "artisan", "queue:work", "redis", "--sleep=1", "--tries=3", "--timeout=120"]
+
+  portal-scheduler:
+    <<: *app
+    container_name: portal-scheduler
+    command: ["php", "artisan", "schedule:work"]
+
+  portal-nginx:
+    image: nginx:1.30.4
+    container_name: portal-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html:ro
+      - ./containers/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - portal-cgnat
+    depends_on:
+      - portal-app
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+networks:
+  portal-cgnat:
+    name: portal-cgnat
+
+volumes:
+  portal-redis:
+  portal-storage:
+  portal-bootstrap-cache:

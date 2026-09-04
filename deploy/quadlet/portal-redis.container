@@ -1,0 +1,23 @@
+[Unit]
+Description=Redis del Portal CGNAT
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=portal-redis
+Image=localhost/redis:8.10.0
+Network=portal-cgnat.network
+PodmanArgs=--network-alias=portal-redis
+Volume=/index2/portal-cgnat/data/redis:/data:Z
+Exec=redis-server --appendonly yes --save 60 1 --loglevel warning
+HealthCmd=redis-cli ping
+HealthInterval=10s
+HealthTimeout=3s
+HealthRetries=12
+
+[Service]
+Restart=always
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

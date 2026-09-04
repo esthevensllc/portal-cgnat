@@ -1,0 +1,24 @@
+[Unit]
+Description=Nginx del Portal CGNAT
+Requires=portal-app.service
+After=portal-app.service
+
+[Container]
+ContainerName=portal-nginx
+Image=localhost/nginx:1.30.4
+Network=portal-cgnat.network
+DNS=10.89.0.1
+PublishPort=8080:80
+Volume=/index2/portal-cgnat/current:/var/www/html:ro,Z
+Volume=/index2/portal-cgnat/current/containers/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro,Z
+HealthCmd=nginx -t
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

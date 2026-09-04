@@ -1,0 +1,23 @@
+[Unit]
+Description=Worker de colas del Portal CGNAT
+Requires=portal-app.service
+After=portal-app.service
+
+[Container]
+ContainerName=portal-worker
+Image=localhost/portal-cgnat/runtime:0.1.7
+Network=portal-cgnat.network
+DNS=10.89.0.1
+EnvironmentFile=/index2/portal-cgnat/config/portal.env
+Volume=/index2/portal-cgnat/current:/var/www/html:ro,Z
+Volume=/index2/portal-cgnat/shared/storage:/var/www/html/storage:Z
+Volume=/index2/portal-cgnat/exports:/var/www/html/storage/app/exports:Z
+Volume=/index2/portal-cgnat/shared/bootstrap-cache:/var/www/html/bootstrap/cache:Z
+Exec=php artisan queue:work redis --sleep=1 --tries=1 --timeout=3600
+
+[Service]
+Restart=always
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
