@@ -66,6 +66,23 @@
     @endif
 </aside>
 
-<main class="page">@yield('content')</main>
+<main class="page">
+    @if ($errors->any())
+        <div class="alert alert--danger" role="alert" aria-live="assertive">
+            <strong>Revisa los datos ingresados.</strong>
+            <ul>
+                @foreach ($errors->all() as $error)
+                    <li>{{ $error }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
+
+    @if (session('status'))
+        <div class="alert alert--success" role="status" aria-live="polite">{{ session('status') }}</div>
+    @endif
+
+    @yield('content')
+</main>
 </body>
 </html>

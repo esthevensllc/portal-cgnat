@@ -41,8 +41,10 @@ const pageState = {
 
 const formatNumber = (value) => new Intl.NumberFormat('es-PE').format(Number(value) || 0);
 
-const showFeedback = (messages) => {
+const showFeedback = (messages, type = 'danger') => {
     if (!(feedback instanceof HTMLElement)) return;
+    feedback.classList.toggle('alert--danger', type === 'danger');
+    feedback.classList.toggle('alert--success', type === 'success');
     feedback.replaceChildren();
     const list = document.createElement('ul');
     messages.forEach((message) => {
@@ -53,6 +55,64 @@ const showFeedback = (messages) => {
     feedback.append(list);
     feedback.hidden = false;
 };
+
+const templateModal = document.querySelector('[data-template-modal]');
+const templateName = document.querySelector('[data-template-name]');
+const templateFeedback = document.querySelector('[data-template-feedback]');
+
+const requestTemplateName = () => new Promise((resolve) => {
+    if (!(templateModal instanceof HTMLElement) || !(templateName instanceof HTMLInputElement)) {
+        resolve(null);
+        return;
+    }
+
+    templateName.value = '';
+    if (templateFeedback instanceof HTMLElement) {
+        templateFeedback.hidden = true;
+        templateFeedback.textContent = '';
+    }
+    templateModal.hidden = false;
+    document.body.classList.add('modal-open');
+    templateName.focus();
+
+    const close = (value) => {
+        templateModal.hidden = true;
+        document.body.classList.remove('modal-open');
+        templateModal.removeEventListener('click', handleClick);
+        templateModal.removeEventListener('keydown', handleKeydown);
+        resolve(value);
+    };
+
+    const confirm = () => {
+        const value = templateName.value.trim();
+        if (!value) {
+            if (templateFeedback instanceof HTMLElement) {
+                templateFeedback.textContent = 'Ingresa un nombre para la plantilla.';
+                templateFeedback.hidden = false;
+            }
+            templateName.focus();
+            return;
+        }
+        close(value);
+    };
+
+    const handleClick = (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('[data-template-confirm]')) confirm();
+        if (target?.closest('[data-template-cancel]')) close(null);
+    };
+
+    const handleKeydown = (event) => {
+        if (event.key === 'Escape') close(null);
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            confirm();
+        }
+    };
+
+    templateModal.addEventListener('click', handleClick);
+    templateModal.addEventListener('keydown', handleKeydown);
+});
 
 const clearFeedback = () => {
     if (feedback instanceof HTMLElement) {
@@ -346,13 +406,13 @@ if (form instanceof HTMLFormElement && result instanceof HTMLElement) {
         }
 
         if (target.hasAttribute('data-template-save')) {
-            const name = window.prompt('Nombre de la plantilla:');
+            const name = await requestTemplateName();
             if (!name) return;
             const data = new FormData(form);
             data.append('template_name', name);
             try {
                 const payload = await postForm(form.dataset.templateUrl ?? '', data);
-                window.alert(payload.message);
+                showFeedback([payload.message], 'success');
             } catch (error) {
                 showFeedback([error instanceof Error ? error.message : 'No se pudo guardar la plantilla.']);
             }
@@ -364,7 +424,7 @@ if (form instanceof HTMLFormElement && result instanceof HTMLElement) {
         target.textContent = 'Enviando...';
         try {
             const payload = await postForm(form.dataset.exportUrl ?? '', new FormData(form));
-            window.alert(payload.message);
+            showFeedback([payload.message], 'success');
         } catch (error) {
             showFeedback([error instanceof Error ? error.message : 'No se pudo enviar la exportación.']);
         } finally {

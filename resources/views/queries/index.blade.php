@@ -124,4 +124,25 @@
         @include('queries.partials.result', ['result' => $result, 'runtimeError' => $runtimeError ?? null])
     </div>
 </section>
+
+<div class="modal" data-template-modal hidden>
+    <div class="modal__backdrop" data-template-cancel></div>
+    <section class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
+        <div class="modal__header">
+            <h2 id="template-modal-title">Guardar plantilla</h2>
+            <button class="modal__close" type="button" data-template-cancel aria-label="Cerrar">×</button>
+        </div>
+        <div class="modal__body">
+            <label class="field" for="template-name">
+                <span class="field-label">Nombre de la plantilla</span>
+                <input class="control" id="template-name" data-template-name maxlength="80" autocomplete="off">
+            </label>
+            <div class="alert alert--danger" data-template-feedback role="alert" hidden></div>
+        </div>
+        <div class="modal__footer">
+            <button class="btn btn--secondary" type="button" data-template-cancel>Cancelar</button>
+            <button class="btn btn--primary" type="button" data-template-confirm>Guardar</button>
+        </div>
+    </section>
+</div>
 @endsection

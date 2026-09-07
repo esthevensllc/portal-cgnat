@@ -279,6 +279,18 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .template-item:hover { border-color: var(--brand); background: #fff7f8; }
 .template-item span, .template-item small { color: var(--muted); }
 .alert--success { border-color: #bce5d2; color: #116748; background: #edf9f3; }
+.modal[hidden] { display: none; }
+.modal { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; }
+.modal__backdrop { position: absolute; inset: 0; background: rgba(25, 33, 43, .55); }
+.modal__dialog { position: relative; width: min(100%, 480px); overflow: hidden; border: 1px solid #d3d8de; border-radius: 8px; background: #fff; box-shadow: 0 18px 48px rgba(25, 33, 43, .28); }
+.modal__header, .modal__footer { display: flex; align-items: center; gap: 12px; padding: 14px 18px; }
+.modal__header { justify-content: space-between; border-bottom: 1px solid #e1e5e9; }
+.modal__header h2 { margin: 0; font-size: 18px; }
+.modal__body { padding: 18px; }
+.modal__body .alert { margin: 12px 0 0; }
+.modal__footer { justify-content: flex-end; border-top: 1px solid #e1e5e9; background: #f8f9fa; }
+.modal__close { border: 0; color: #647181; background: transparent; font-size: 26px; line-height: 1; cursor: pointer; }
+.modal-open { overflow: hidden; }
 .login-page { display: grid; min-height: 100vh; place-items: center; padding: 20px; background: #eef1f4; }
 .login-card { width: min(100%, 475px); padding: 76px 56px 56px; border: 1px solid #d3d8de; border-top: 3px solid var(--brand); border-radius: 6px; background: white; box-shadow: 0 2px 3px rgba(34, 47, 62, .22); }
 .login-card h1 { margin: 0; color: #354052; text-align: center; font-size: 24px; font-weight: 800; letter-spacing: .04em; }.login-card__subtitle { margin: 8px 0 40px; color: #748092; text-align: center; }.login-card .field { margin-bottom: 9px; }.login-card .control { min-height: 58px; border-radius: 3px; padding-inline: 13px; }.login-card__submit { width: 100%; min-height: 39px; margin-top: 39px; border-radius: 5px; }.password-field { position: relative; }.password-field .control { padding-right: 46px; }.password-toggle { position: absolute; top: 0; right: 0; width: 45px; height: 58px; border: 0; color: #6c7480; background: transparent; cursor: pointer; }.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
