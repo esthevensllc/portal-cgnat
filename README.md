@@ -33,9 +33,10 @@ ClickHouse `portal_cgnat`.
 5. La identidad se guarda en la sesión Redis. Cada solicitud protegida vuelve
    a comprobar su permiso; retirar un rol corta el acceso inmediatamente.
 
-El rol recomendado para usuarios finales es `cgnat_basico`. La autenticación
-LDAP por sí sola no otorga acceso: cada usuario debe ser aprovisionado en
-ClickHouse.
+El portal admite únicamente dos roles: `cgnat_basico` para los usuarios finales
+y `cgnat_administrador` para la administración completa, incluida la auditoría.
+La autenticación LDAP por sí sola no otorga acceso: cada usuario debe ser
+aprovisionado en ClickHouse.
 
 ## Versiones fijadas
 
@@ -307,17 +308,17 @@ INSERT INTO portal_cgnat.user_roles VALUES
 ('usuario.ad', 'cgnat_basico', 0, now64(3), 'admin.portal');
 ```
 
-Para crear más permisos/roles:
+Para asignar todos los privilegios, incluida la auditoría, usar el rol
+`cgnat_administrador`:
 
 ```sql
-INSERT INTO portal_cgnat.roles VALUES
-('cgnat_auditor', 'Auditoría CGNAT', 1, now64(3), 'admin.portal');
-INSERT INTO portal_cgnat.role_permissions VALUES
-('cgnat_auditor', 'cgnat.query', 1, now64(3), 'admin.portal'),
-('cgnat_auditor', 'cgnat.audit.view', 1, now64(3), 'admin.portal');
 INSERT INTO portal_cgnat.user_roles VALUES
-('usuario.ad', 'cgnat_auditor', 1, now64(3), 'admin.portal');
+('usuario.ad', 'cgnat_administrador', 1, now64(3), 'admin.portal');
 ```
+
+No crear ni asignar `cgnat_auditor`, `cgnat_consultor` u otros roles. La
+autorización del portal solo acepta roles activos con código
+`cgnat_administrador` o `cgnat_basico`.
 
 Las tablas de roles usan `ReplacingMergeTree(version)`. No ejecutar `UPDATE`;
 cada cambio es un nuevo `INSERT` versionado. El portal determina el último
@@ -330,9 +331,10 @@ exportaciones y plantillas. Nunca almacena contraseñas, cookies, tokens ni la
 lista completa de grupos LDAP. `query_audit` contiene los filtros técnicos de
 las consultas y `audit_events` conserva los demás eventos durante 365 días.
 
-El DDL anterior concede `cgnat.audit.view` únicamente a
-`cgnat_administrador`. Para habilitarlo en una instalación existente, ejecutar
-una sola vez el DDL completo y comprobar las dos tablas:
+El DDL concede `cgnat.audit.view` únicamente a `cgnat_administrador`; por tanto,
+ese rol incluye los privilegios que correspondían al auditor. Para habilitarlo
+en una instalación existente, ejecutar una sola vez el DDL completo y comprobar
+las dos tablas:
 
 ```bash
 ch_query --multiquery < /index2/portal-cgnat/current/deploy/clickhouse/portal_cgnat.sql

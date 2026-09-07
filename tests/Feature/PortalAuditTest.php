@@ -36,7 +36,7 @@ class PortalAuditTest extends TestCase
         $this->get('/portalcgnat/auditoria')->assertForbidden();
     }
 
-    public function test_auditor_can_open_the_audit_screen(): void
+    public function test_administrator_can_open_the_audit_screen(): void
     {
         config()->set('ldap.enabled', false);
         config()->set('ldap.temporary_permissions', ['cgnat.query', 'cgnat.audit.view']);

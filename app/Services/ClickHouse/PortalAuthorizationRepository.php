@@ -34,6 +34,14 @@ INNER JOIN
 ) AS user_roles USING (username)
 INNER JOIN
 (
+    SELECT code AS role_code
+    FROM portal_cgnat.roles
+    WHERE code IN ('cgnat_administrador', 'cgnat_basico')
+    GROUP BY code
+    HAVING argMax(is_active, version) = 1
+) AS active_roles USING (role_code)
+INNER JOIN
+(
     SELECT role_code, permission
     FROM portal_cgnat.role_permissions
     GROUP BY role_code, permission

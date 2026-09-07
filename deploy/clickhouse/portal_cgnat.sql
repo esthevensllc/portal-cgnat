@@ -130,8 +130,7 @@ TTL updated_at + INTERVAL 30 DAY DELETE;
 
 INSERT INTO portal_cgnat.roles VALUES
 ('cgnat_basico', 'Consulta CGNAT básica', 1, now64(3), 'bootstrap'),
-('cgnat_administrador', 'Administrador Portal CGNAT', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'Consulta CGNAT (legado)', 1, now64(3), 'bootstrap');
+('cgnat_administrador', 'Administrador Portal CGNAT', 1, now64(3), 'bootstrap');
 
 INSERT INTO portal_cgnat.role_permissions VALUES
 ('cgnat_basico', 'cgnat.query', 1, now64(3), 'bootstrap'),
@@ -142,9 +141,4 @@ INSERT INTO portal_cgnat.role_permissions VALUES
 ('cgnat_administrador', 'cgnat.templates', 1, now64(3), 'bootstrap'),
 ('cgnat_administrador', 'cgnat.nodes', 1, now64(3), 'bootstrap'),
 ('cgnat_administrador', 'cgnat.admin', 1, now64(3), 'bootstrap'),
-('cgnat_administrador', 'cgnat.audit.view', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'cgnat.query', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'cgnat.exports', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'cgnat.templates', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'cgnat.nodes', 1, now64(3), 'bootstrap'),
-('cgnat_consultor', 'cgnat.admin', 1, now64(3), 'bootstrap');
+('cgnat_administrador', 'cgnat.audit.view', 1, now64(3), 'bootstrap');
