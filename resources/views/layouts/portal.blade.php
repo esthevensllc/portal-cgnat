@@ -1,8 +1,71 @@
 <!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{{ csrf_token() }}"><title>@yield('title', 'Portal CGNAT')</title>@vite(['resources/css/app.css', 'resources/js/app.js'])</head>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>@yield('title', 'Portal CGNAT')</title>
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
+</head>
 <body>
-@php($permissions = (array) session('portal_auth.permissions', []))
-@php($isAdmin = in_array('cgnat.admin', $permissions, true))
-<header class="topbar"><button class="menu-toggle" type="button" data-menu-toggle aria-label="Abrir navegación">☰</button><div class="topbar__brand">Portal CGNAT</div><div class="topbar__title">@yield('page-title', 'Consulta sesiones')</div>@if (config('ldap.enabled', true))<form method="POST" action="{{ route('auth.logout') }}">@csrf<button class="topbar__user" type="submit" title="Cerrar sesión">{{ session('portal_auth.username', '—') }}</button></form>@else<div class="topbar__user" title="Autenticación temporalmente deshabilitada">{{ session('portal_auth.username', 'acceso_temporal') }}</div>@endif</header>
-<aside class="sidebar" aria-label="Navegación principal"><div class="nav-section">Operación</div><a class="nav-item {{ request()->routeIs('queries.*') ? 'is-active' : '' }}" href="{{ route('queries.index') }}"><span class="nav-icon">⌕</span> Consulta sesiones</a>@if(in_array('cgnat.exports', $permissions, true))<a class="nav-item {{ request()->routeIs('exports.*') ? 'is-active' : '' }}" href="{{ route('exports.index') }}"><span class="nav-icon">▤</span> Tareas y exportaciones</a>@endif<div class="nav-section">Configuración</div>@if(in_array('cgnat.templates', $permissions, true))<a class="nav-item {{ request()->routeIs('templates.*') ? 'is-active' : '' }}" href="{{ route('templates.index') }}"><span class="nav-icon">◇</span> Plantillas</a>@endif@if(in_array('cgnat.audit.view', $permissions, true))<a class="nav-item {{ request()->routeIs('audit.*') ? 'is-active' : '' }}" href="{{ route('audit.index') }}"><span class="nav-icon">◎</span> Auditoría</a>@endif@if ($isAdmin)<div class="sidebar__status"><strong></strong><div class="status-line"><span class="status-dot"></span></div></div>@endif</aside>
-<main class="page">@yield('content')</main></body></html>
+@php
+    $permissions = (array) session('portal_auth.permissions', []);
+    $isAdmin = in_array('cgnat.admin', $permissions, true);
+@endphp
+
+<header class="topbar">
+    <button class="menu-toggle" type="button" data-menu-toggle aria-label="Abrir navegación">☰</button>
+    <div class="topbar__brand">Portal CGNAT</div>
+    <div class="topbar__title">@yield('page-title', 'Consulta sesiones')</div>
+
+    @if (config('ldap.enabled', true))
+        <form method="POST" action="{{ route('auth.logout') }}">
+            @csrf
+            <button class="topbar__user" type="submit" title="Cerrar sesión">
+                {{ session('portal_auth.username', '—') }}
+            </button>
+        </form>
+    @else
+        <div class="topbar__user" title="Autenticación temporalmente deshabilitada">
+            {{ session('portal_auth.username', 'acceso_temporal') }}
+        </div>
+    @endif
+</header>
+
+<aside class="sidebar" aria-label="Navegación principal">
+    <div class="nav-section">Operación</div>
+    <a class="nav-item {{ request()->routeIs('queries.*') ? 'is-active' : '' }}" href="{{ route('queries.index') }}">
+        <span class="nav-icon">⌕</span> Consulta sesiones
+    </a>
+
+    @if (in_array('cgnat.exports', $permissions, true))
+        <a class="nav-item {{ request()->routeIs('exports.*') ? 'is-active' : '' }}" href="{{ route('exports.index') }}">
+            <span class="nav-icon">▤</span> Tareas y exportaciones
+        </a>
+    @endif
+
+    <div class="nav-section">Configuración</div>
+
+    @if (in_array('cgnat.templates', $permissions, true))
+        <a class="nav-item {{ request()->routeIs('templates.*') ? 'is-active' : '' }}" href="{{ route('templates.index') }}">
+            <span class="nav-icon">◇</span> Plantillas
+        </a>
+    @endif
+
+    @if (in_array('cgnat.audit.view', $permissions, true))
+        <a class="nav-item {{ request()->routeIs('audit.*') ? 'is-active' : '' }}" href="{{ route('audit.index') }}">
+            <span class="nav-icon">◎</span> Auditoría
+        </a>
+    @endif
+
+    @if ($isAdmin)
+        <div class="sidebar__status">
+            <strong></strong>
+            <div class="status-line"><span class="status-dot"></span></div>
+        </div>
+    @endif
+</aside>
+
+<main class="page">@yield('content')</main>
+</body>
+</html>
