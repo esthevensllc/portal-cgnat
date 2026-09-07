@@ -241,6 +241,11 @@ LDAP_LOGIN_MAX_ATTEMPTS=5
 LDAP_LOGIN_DECAY_SECONDS=300
 ```
 
+`APP_DEBUG=false` es obligatorio fuera del entorno de desarrollo. Los errores
+no recuperables HTTP 500 y el modo mantenimiento HTTP 503 muestran una página
+neutra de mantenimiento, sin traza, rutas internas ni detalles de Laravel.
+Después de modificar `portal.env`, limpiar la configuración almacenada en caché.
+
 Para generar `APP_KEY`, una vez iniciado el contenedor:
 
 ```bash
