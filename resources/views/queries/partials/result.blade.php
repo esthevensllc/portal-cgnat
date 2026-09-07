@@ -130,7 +130,7 @@
         <div>
             <div class="empty-state__icon">⌕</div>
             <strong>La consulta no devolvió registros</strong>
-            <span>Revisa el rango start_time, router e IP origen.</span>
+            <span>Revisa el rango start_time y el router.</span>
         </div>
     </div>
 @else
@@ -138,7 +138,7 @@
         <div>
             <div class="empty-state__icon">⌕</div>
             <strong>Completa los filtros para comenzar</strong>
-            <span><b>Fecha inicio</b>, <b>fecha fin</b>, <b>router</b> e <b>IP origen</b> son obligatorios.</span>
+            <span><b>Fecha inicio</b>, <b>fecha fin</b> y <b>router</b> son obligatorios.</span>
         </div>
     </div>
 @endif
