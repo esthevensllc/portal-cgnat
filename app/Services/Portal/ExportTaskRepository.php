@@ -8,6 +8,9 @@ use Illuminate\Support\Str;
 
 class ExportTaskRepository
 {
+    /** @var array<string, string> */
+    private array $createdAtCache = [];
+
     public function __construct(private readonly PortalStoreService $store) {}
 
     public function create(string $username, CgnatSearch $search, int $totalRows): string
@@ -36,6 +39,8 @@ class ExportTaskRepository
     public function update(string $id, string $username, string $state, int $totalRows, int $processedRows, string $filename = '', string $error = ''): void
     {
         $now = now()->format('Y-m-d H:i:s.v');
+        $createdAt = $this->originalCreatedAt($id, $username, $now);
+
         $this->store->insertJson('export_tasks', [
             'id' => $id,
             'username' => mb_strtolower($username),
@@ -46,10 +51,32 @@ class ExportTaskRepository
             'filename' => $filename,
             'filters_json' => '',
             'error' => $error,
-            'created_at' => $now,
+            'created_at' => $createdAt,
             'updated_at' => $now,
             'version' => $now,
         ]);
+    }
+
+    private function originalCreatedAt(string $id, string $username, string $fallback): string
+    {
+        if (isset($this->createdAtCache[$id])) {
+            return $this->createdAtCache[$id];
+        }
+
+        $rows = $this->store->select(<<<'SQL'
+SELECT min(created_at) AS created_at
+FROM portal_cgnat.export_tasks
+WHERE id = {id:UUID}
+  AND lower(username) = lower({username:String})
+SQL, ['param_id' => $id, 'param_username' => $username]);
+
+        $createdAt = ! empty($rows[0]['created_at'])
+            ? (string) $rows[0]['created_at']
+            : $fallback;
+
+        $this->createdAtCache[$id] = $createdAt;
+
+        return $createdAt;
     }
 
     /** @return list<array<string, mixed>> */
