@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Auth;
 use App\Http\Controllers\Controller;
 use App\Services\Auth\LdapAuthenticationService;
 use App\Services\ClickHouse\PortalAuthorizationRepository;
+use App\Services\Portal\PortalAuditService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -31,6 +32,7 @@ class PortalLoginController extends Controller
         Request $request,
         LdapAuthenticationService $ldap,
         PortalAuthorizationRepository $authorization,
+        PortalAuditService $audit,
     ): RedirectResponse {
         if (! (bool) config('ldap.enabled', true)) {
             return redirect()->route('queries.index');
@@ -47,6 +49,9 @@ class PortalLoginController extends Controller
 
         if (RateLimiter::tooManyAttempts($rateKey, $maxAttempts)) {
             $seconds = RateLimiter::availableIn($rateKey);
+            $audit->record('auth.login', 'rate_limited', $credentials['username'], $request, [
+                'retry_after_seconds' => $seconds,
+            ]);
 
             return back()
                 ->withInput($request->only('username'))
@@ -54,18 +59,25 @@ class PortalLoginController extends Controller
         }
 
         try {
-            $principal = $ldap->authenticate($credentials['username'], $credentials['password']);
+            $authentication = $ldap->authenticate($credentials['username'], $credentials['password']);
         } catch (RuntimeException $exception) {
             report($exception);
             RateLimiter::hit($rateKey, $decaySeconds);
+            $audit->record('auth.login', 'failure', $credentials['username'], $request, [
+                'reason' => 'ldap_unavailable',
+            ]);
 
             return back()
                 ->withInput($request->only('username'))
                 ->withErrors(['username' => 'No fue posible comunicarse con el servicio LDAP corporativo. Inténtalo nuevamente.']);
         }
 
+        $principal = $authentication['principal'];
         if ($principal === null) {
             RateLimiter::hit($rateKey, $decaySeconds);
+            $audit->record('auth.login', 'failure', $credentials['username'], $request, [
+                'reason' => $authentication['status'],
+            ]);
 
             return back()
                 ->withInput($request->only('username'))
@@ -74,8 +86,25 @@ class PortalLoginController extends Controller
 
         RateLimiter::clear($rateKey);
 
-        $permissions = $authorization->permissions($principal['username']);
+        try {
+            $permissions = $authorization->permissions($principal['username']);
+        } catch (RuntimeException $exception) {
+            report($exception);
+            $audit->record('auth.login', 'failure', $principal['username'], $request, [
+                'reason' => 'authorization_store_unavailable',
+            ]);
+
+            return back()
+                ->withInput($request->only('username'))
+                ->withErrors(['username' => 'No fue posible validar los permisos del portal. Inténtalo nuevamente.']);
+        }
+
         if (! in_array('cgnat.query', $permissions, true)) {
+            $audit->record('auth.login', 'denied', $principal['username'], $request, [
+                'reason' => 'portal_role_missing',
+                'required_permission' => 'cgnat.query',
+            ]);
+
             return back()
                 ->withInput($request->only('username'))
                 ->withErrors(['username' => 'Tu cuenta LDAP es válida, pero no tiene un rol activo para este portal.']);
@@ -86,6 +115,11 @@ class PortalLoginController extends Controller
             ...$principal,
             'permissions' => $permissions,
             'authenticated_at' => now()->toIso8601String(),
+        ]);
+
+        $audit->record('auth.login', 'success', $principal['username'], $request, [
+            'permissions' => $permissions,
+            'ldap_group_required' => filled(config('ldap.allowed_group')),
         ]);
 
         return redirect()->intended(route('queries.index'));

@@ -8,6 +8,7 @@ use App\Http\Requests\CgnatSearchRequest;
 use App\Jobs\GenerateCgnatExport;
 use App\Services\ClickHouse\ClickHouseQueryService;
 use App\Services\Portal\ExportTaskRepository;
+use App\Services\Portal\PortalAuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -17,20 +18,27 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class ExportController extends Controller
 {
-    public function store(CgnatSearchRequest $request, ClickHouseQueryService $clickhouse, ExportTaskRepository $tasks): JsonResponse|RedirectResponse
+    public function store(CgnatSearchRequest $request, ClickHouseQueryService $clickhouse, ExportTaskRepository $tasks, PortalAuditService $audit): JsonResponse|RedirectResponse
     {
+        $username = (string) $request->session()->get('portal_auth.username');
+
         try {
             $search = CgnatSearch::fromValidated($this->normalizedFilters($request));
             $count = $clickhouse->count($search);
             if ($count['partial']) {
                 throw new RuntimeException('No se puede generar una exportación parcial: uno o más nodos ClickHouse no respondieron.');
             }
-            $username = (string) $request->session()->get('portal_auth.username');
             $taskId = $tasks->create($username, $search, $count['total']);
             GenerateCgnatExport::dispatch($taskId, $username, $search->toArray(), $count['total'], $count['per_node']);
+            $audit->record('export.queued', 'success', $username, $request, [
+                'selected_nodes' => $search->nodes,
+            ], 'export_task', $taskId, $count['elapsed_ms'], $count['total']);
             $message = 'El CSV fue enviado a Tareas y exportaciones. Puedes continuar trabajando mientras se genera.';
             return $request->expectsJson() ? response()->json(['message' => $message, 'task_id' => $taskId], 202) : redirect()->route('exports.index')->with('status', $message);
         } catch (RuntimeException $exception) {
+            $audit->record('export.request', 'failure', $username, $request, [
+                'reason' => mb_substr($exception->getMessage(), 0, 1000),
+            ]);
             return $request->expectsJson() ? response()->json(['message' => $exception->getMessage()], 422) : back()->withErrors(['export' => $exception->getMessage()]);
         }
     }
@@ -40,7 +48,7 @@ class ExportController extends Controller
         return view('exports.index', ['tasks' => $tasks->forUser((string) $request->session()->get('portal_auth.username'))]);
     }
 
-    public function download(Request $request, string $id, ExportTaskRepository $tasks): BinaryFileResponse
+    public function download(Request $request, string $id, ExportTaskRepository $tasks, PortalAuditService $audit): BinaryFileResponse
     {
         if (! Str::isUuid($id)) abort(404);
         $task = $tasks->findForUser($id, (string) $request->session()->get('portal_auth.username'));
@@ -48,6 +56,16 @@ class ExportController extends Controller
         $username = preg_replace('/[^a-z0-9_.-]/i', '_', strtolower((string) $request->session()->get('portal_auth.username')));
         $path = storage_path('app/exports/'.$username.'/'.$task['filename']);
         if (! is_file($path)) abort(404);
+        $audit->record(
+            'export.downloaded',
+            'success',
+            (string) $request->session()->get('portal_auth.username'),
+            $request,
+            ['filename' => (string) $task['filename']],
+            'export_task',
+            $id,
+        );
+
         return response()->download($path, (string) $task['filename'], ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 

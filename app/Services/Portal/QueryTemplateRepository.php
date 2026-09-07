@@ -10,11 +10,12 @@ class QueryTemplateRepository
     public function __construct(private readonly PortalStoreService $store) {}
 
     /** @param array<string, mixed> $filters */
-    public function create(string $username, string $name, array $filters): void
+    public function create(string $username, string $name, array $filters): string
     {
+        $id = (string) Str::uuid();
         $now = now()->format('Y-m-d H:i:s.v');
         $this->store->insertJson('query_templates', [
-            'id' => (string) Str::uuid(),
+            'id' => $id,
             'username' => mb_strtolower($username),
             'name' => $name,
             'filters_json' => json_encode($this->sanitizeFilters($filters), JSON_THROW_ON_ERROR),
@@ -22,6 +23,8 @@ class QueryTemplateRepository
             'created_at' => $now,
             'version' => $now,
         ]);
+
+        return $id;
     }
 
     /** @return list<array<string, mixed>> */

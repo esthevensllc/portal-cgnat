@@ -25,6 +25,8 @@ class QueryController extends Controller
 
     public function store(CgnatSearchRequest $request, ClickHouseQueryService $service, PortalQueryAuditService $audit): View|JsonResponse
     {
+        $search = null;
+
         try {
             $validated = $this->normalizedFilters($request);
             $search = CgnatSearch::fromValidated($validated);
@@ -91,7 +93,7 @@ class QueryController extends Controller
             ];
 
             if (! $isPagination) {
-                $audit->record((string) $request->session()->get('portal_auth.username'), $search, $result);
+                $audit->recordSuccess((string) $request->session()->get('portal_auth.username'), $search, $result, $request);
             }
 
             if ($request->expectsJson()) {
@@ -109,6 +111,15 @@ class QueryController extends Controller
                 'permissions' => (array) $request->session()->get('portal_auth.permissions', []),
             ]);
         } catch (RuntimeException $exception) {
+            if ($search instanceof CgnatSearch && ! ($isPagination ?? false)) {
+                $audit->recordFailure(
+                    (string) $request->session()->get('portal_auth.username'),
+                    $search,
+                    $exception->getMessage(),
+                    $request,
+                );
+            }
+
             if ($request->expectsJson()) {
                 return response()->json([
                     'html' => view('queries.partials.result', [

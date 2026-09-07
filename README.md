@@ -13,7 +13,7 @@ Nginx (Podman) ──> PHP-FPM / Laravel (Podman)
                            │        │
                            │        └── Redis: sesión, caché y colas
                            │
-                           ├── CAS corporativo: autentica identidad AD
+                           ├── LDAP corporativo: autentica identidad AD
                            ├── ClickHouse cgnat: consultas CGNAT
                            └── ClickHouse portal_cgnat: usuarios, roles,
                                permisos y auditoría
@@ -25,18 +25,17 @@ ClickHouse `portal_cgnat`.
 
 ## Flujo de identidad y autorización
 
-1. El usuario abre `/consultas`.
-2. Laravel lo redirige al CAS corporativo, igual que `portalseguimiento`.
-3. CAS valida la sesión de Active Directory y vuelve a
-   `CAS_REDIRECT_TO?ticketID=...`.
-4. Laravel valida el ticket por servidor con `checkRemoteLogin`.
-5. Laravel consulta ClickHouse: el usuario debe estar activo y tener un rol
+1. El usuario abre `/portalcgnat/login`.
+2. Laravel valida las credenciales directamente contra LDAP/Active Directory.
+3. Si `LDAP_ALLOWED_GROUP` está configurado, comprueba la pertenencia al grupo.
+4. Laravel consulta ClickHouse: el usuario debe estar activo y tener un rol
    con el permiso `cgnat.query`.
-6. La identidad se guarda en la sesión Redis. Cada solicitud protegida vuelve
+5. La identidad se guarda en la sesión Redis. Cada solicitud protegida vuelve
    a comprobar su permiso; retirar un rol corta el acceso inmediatamente.
 
-El rol inicial es `cgnat_consultor`. La autenticación AD por sí sola no otorga
-acceso: cada usuario debe ser aprovisionado en ClickHouse.
+El rol recomendado para usuarios finales es `cgnat_basico`. La autenticación
+LDAP por sí sola no otorga acceso: cada usuario debe ser aprovisionado en
+ClickHouse.
 
 ## Versiones fijadas
 
@@ -53,7 +52,7 @@ acceso: cada usuario debe ser aprovisionado en ClickHouse.
 
 ## Desarrollo local (Windows/Docker)
 
-Copiar `.env.example` a `.env`, completar ClickHouse y CAS, y ejecutar:
+Copiar `.env.example` a `.env`, completar ClickHouse y LDAP, y ejecutar:
 
 ```powershell
 docker compose up -d --build
@@ -86,11 +85,10 @@ producción:
 - `/index2` existe, tiene espacio suficiente y XFS con `ftype=1`.
 - El servidor del portal puede llegar por TCP `8123` a cada ClickHouse que se
   habilitará en `CLICKHOUSE_NODES`.
-- El servidor del portal puede resolver y llegar al CAS corporativo por HTTPS.
+- El servidor del portal puede resolver y llegar al LDAP corporativo por TCP
+  `389` o por el puerto acordado con infraestructura.
 - La red permite a los usuarios llegar al puerto TCP `8080` del portal (o al
   puerto que se publicará detrás del proxy productivo).
-- La aplicación CAS ya tiene registrado el retorno productivo exacto:
-  `CAS_REDIRECT_TO=http://NOMBRE_O_IP_PRODUCTIVA:8080/consultas`.
 - Existe una cuenta ClickHouse de runtime con permisos para las cuatro fuentes
   `cgnat.*` y para el nodo que almacenará `portal_cgnat`.
 
@@ -105,9 +103,9 @@ df -hT /index2
 # Repetir para cada IP ClickHouse configurada.
 curl --max-time 3 -fsS http://IP_CLICKHOUSE:8123/ping
 
-# Ajustar host y puerto reales del CAS si usa un puerto distinto de 443.
-getent hosts HOST_CAS
-nc -vz -w 3 HOST_CAS 443
+# Ajustar host y puerto reales de LDAP.
+getent hosts HOST_LDAP
+nc -vz -w 3 HOST_LDAP 389
 ss -lntp | grep ':8080' || true
 ```
 
@@ -179,7 +177,7 @@ la versión (`0.1.6` en el ejemplo), no el directorio extraído.
 Para cambios solo de código realizados por WinSCP no hay que reconstruir una
 imagen. Transferir los archivos cambiados (incluido `public/build` cuando
 corresponda), limpiar cachés y reiniciar los contenedores indicados abajo.
-La versión actual también carga explícitamente las clases nuevas de CAS para
+La versión actual también carga explícitamente las clases nuevas de LDAP para
 ser compatible con el `vendor` classmap de la imagen ya desplegada.
 
 ## Configurar `portal.env`
@@ -220,14 +218,23 @@ CLICKHOUSE_CH04_DATABASE=cgnat
 CLICKHOUSE_CH04_TABLE_PATTERN=huawei_cgn_nat_v2_%s
 CLICKHOUSE_CH04_VERIFY_TLS=false
 
-PORTAL_STORE_NODE=ch04
+PORTAL_STORE_URL=http://IP_CLICKHOUSE_PERSISTENCIA:8123
+PORTAL_STORE_USERNAME=portal_cgnat
+PORTAL_STORE_PASSWORD=SECRETO_RUNTIME
 PORTAL_STORE_DATABASE=portal_cgnat
+PORTAL_STORE_VERIFY_TLS=false
+PORTAL_STORE_CONNECT_TIMEOUT=3
+PORTAL_STORE_QUERY_TIMEOUT=10
 
-CAS_URL_AUTH=https://CAS_INTERNO/RUTA
-CAS_API_KEY=VALOR_CAS
-CAS_APP_SECRET=SECRETO_CAS
-CAS_REDIRECT_TO=http://NOMBRE_O_IP_PRODUCTIVA:8080/consultas
-CAS_VERIFY_TLS=true
+PORTAL_AUTH_ENABLED=true
+LDAP_HOST=IP_O_DNS_LDAP
+LDAP_PORT=389
+LDAP_BASE_DN="DC=empresa,DC=local"
+LDAP_DOMAIN=TIM
+# LDAP_ALLOWED_GROUP="CN=Grupo autorizado,OU=Grupos,DC=empresa,DC=local"
+LDAP_TIMEOUT=10
+LDAP_LOGIN_MAX_ATTEMPTS=5
+LDAP_LOGIN_DECAY_SECONDS=300
 ```
 
 Para generar `APP_KEY`, una vez iniciado el contenedor:
@@ -272,8 +279,8 @@ administrativa temporal), ejecutar una sola vez:
 ch_query --multiquery < /index2/portal-cgnat/current/deploy/clickhouse/portal_cgnat.sql
 ```
 
-Ejecutar este DDL en el mismo ClickHouse indicado por `PORTAL_STORE_NODE`
-(normalmente `ch04`). Verificar antes de arrancar el portal:
+Ejecutar este DDL en el ClickHouse indicado por `PORTAL_STORE_URL`. Verificar
+antes de arrancar el portal:
 
 ```bash
 clickhouse-client --host IP_PORTAL_STORE --port 9000 --user ADMIN \
@@ -287,14 +294,14 @@ INSERT INTO portal_cgnat.users VALUES
 ('usuario.ad', 'Nombre visible', 'usuario@empresa.pe', 1, 'AD', now64(3), now64(3));
 
 INSERT INTO portal_cgnat.user_roles VALUES
-('usuario.ad', 'cgnat_consultor', 1, now64(3), 'admin.portal');
+('usuario.ad', 'cgnat_basico', 1, now64(3), 'admin.portal');
 ```
 
 Para retirar acceso sin borrar historial, insertar una nueva versión:
 
 ```sql
 INSERT INTO portal_cgnat.user_roles VALUES
-('usuario.ad', 'cgnat_consultor', 0, now64(3), 'admin.portal');
+('usuario.ad', 'cgnat_basico', 0, now64(3), 'admin.portal');
 ```
 
 Para crear más permisos/roles:
@@ -303,7 +310,8 @@ Para crear más permisos/roles:
 INSERT INTO portal_cgnat.roles VALUES
 ('cgnat_auditor', 'Auditoría CGNAT', 1, now64(3), 'admin.portal');
 INSERT INTO portal_cgnat.role_permissions VALUES
-('cgnat_auditor', 'cgnat.query', 1, now64(3), 'admin.portal');
+('cgnat_auditor', 'cgnat.query', 1, now64(3), 'admin.portal'),
+('cgnat_auditor', 'cgnat.audit.view', 1, now64(3), 'admin.portal');
 INSERT INTO portal_cgnat.user_roles VALUES
 ('usuario.ad', 'cgnat_auditor', 1, now64(3), 'admin.portal');
 ```
@@ -312,6 +320,31 @@ Las tablas de roles usan `ReplacingMergeTree(version)`. No ejecutar `UPDATE`;
 cada cambio es un nuevo `INSERT` versionado. El portal determina el último
 estado con `argMax`, por lo que no depende de que ocurra una compactación.
 
+## Auditoría del portal
+
+La auditoría registra los accesos LDAP, denegaciones por rol, consultas CGNAT,
+exportaciones y plantillas. Nunca almacena contraseñas, cookies, tokens ni la
+lista completa de grupos LDAP. `query_audit` contiene los filtros técnicos de
+las consultas y `audit_events` conserva los demás eventos durante 365 días.
+
+El DDL anterior concede `cgnat.audit.view` únicamente a
+`cgnat_administrador`. Para habilitarlo en una instalación existente, ejecutar
+una sola vez el DDL completo y comprobar las dos tablas:
+
+```bash
+ch_query --multiquery < /index2/portal-cgnat/current/deploy/clickhouse/portal_cgnat.sql
+
+ch_query "EXISTS TABLE portal_cgnat.query_audit"
+ch_query "EXISTS TABLE portal_cgnat.audit_events"
+ch_query "SELECT role_code, permission, argMax(is_active, version) AS active FROM portal_cgnat.role_permissions WHERE permission = 'cgnat.audit.view' GROUP BY role_code, permission"
+```
+
+Después de iniciar sesión con un administrador, el menú `Auditoría` permite
+filtrar los últimos 500 eventos por fecha, usuario, tipo, resultado, IP o ID de
+solicitud. Las modificaciones ejecutadas directamente con DBeaver no atraviesan
+Laravel; para investigarlas se debe consultar también `system.query_log` con
+una cuenta administrativa de ClickHouse.
+
 ## Arranque con Quadlet
 
 Orden final de instalación desde cero:
@@ -319,11 +352,11 @@ Orden final de instalación desde cero:
 1. Preparar `/index2` y el `graphroot` de Podman.
 2. Transferir y validar los artefactos; cargar imágenes e instalar el release.
 3. Crear `config/portal.env` con `APP_KEY`, los cuatro nodos, la cuenta
-   restringida ClickHouse y el retorno CAS de producción.
-4. Crear `portal_cgnat` en el nodo `PORTAL_STORE_NODE` y aprovisionar al menos
-   un usuario AD con `cgnat_consultor`.
+   restringida ClickHouse y la conexión LDAP.
+4. Crear `portal_cgnat` en `PORTAL_STORE_URL` y aprovisionar al menos
+   un usuario AD con `cgnat_basico`.
 5. Instalar Quadlets, abrir TCP `8080` según la política de red y arrancar.
-6. Validar salud, red ClickHouse y autenticación CAS con ese usuario AD.
+6. Validar salud, red ClickHouse y autenticación LDAP con ese usuario AD.
 
 Si `firewalld` administra el acceso local y la política lo permite, publicar
 el puerto de forma permanente antes de la prueba de usuario:
@@ -402,9 +435,8 @@ Problemas frecuentes:
 | Síntoma | Corrección |
 |---|---|
 | `getaddrinfo for portal-redis failed` | Confirmar `DNS=10.89.0.1`, alias `--network-alias=portal-redis`, recargar Quadlet y reiniciar. |
-| CAS vuelve pero muestra 403 | El ticket AD es válido, pero falta la fila activa en `portal_cgnat.users` o el rol/permisos. |
-| CAS no conecta | Revisar URL/ruta, DNS y certificado; mantener `CAS_VERIFY_TLS=true` y corregir la cadena CA, no desactivar verificación permanentemente. |
-| CAS muestra `dh key too small` | El CAS usa DH débil para OpenSSL 3. Temporalmente configurar `OPENSSL_CONF=/var/www/html/deploy/openssl/cas-legacy.cnf`; solicitar al equipo CAS ECDHE o DH de al menos 2048 bits y retirar esa variable. |
+| LDAP acepta la cuenta pero el portal deniega el acceso | Falta la fila activa en `portal_cgnat.users`, el rol o el permiso `cgnat.query`. |
+| LDAP no conecta | Revisar `LDAP_HOST`, `LDAP_PORT`, DNS, firewall y que la extensión LDAP esté instalada en el contenedor. |
 | Consulta sin resultados | Verificar rango horario, nodo seleccionado, tabla diaria y los filtros. |
 | Error `String, IPv4` | Transferir la versión que normaliza IP con `toString()` antes de hacer `UNION ALL`. |
 

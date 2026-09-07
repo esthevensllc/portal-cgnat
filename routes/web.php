@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\PortalLoginController;
 use App\Http\Controllers\Auth\PortalSessionController;
+use App\Http\Controllers\Cgnat\AuditController;
 use App\Http\Controllers\Cgnat\ExportController;
 use App\Http\Controllers\Cgnat\QueryController;
 use App\Http\Controllers\Cgnat\TemplateController;
@@ -33,6 +34,10 @@ Route::prefix('portalcgnat')->group(function (): void {
     Route::middleware('portal.auth:cgnat.templates')->group(function (): void {
         Route::get('/plantillas', [TemplateController::class, 'index'])->name('templates.index');
         Route::post('/plantillas', [TemplateController::class, 'store'])->name('templates.store');
+    });
+
+    Route::middleware('portal.auth:cgnat.audit.view')->group(function (): void {
+        Route::get('/auditoria', [AuditController::class, 'index'])->name('audit.index');
     });
 });
 

@@ -12,16 +12,17 @@ class QueryPortalTest extends TestCase
         parent::setUp();
 
         $this->withoutVite();
+        config()->set('ldap.enabled', false);
     }
 
     public function test_home_redirects_to_the_query_portal(): void
     {
-        $this->get('/')->assertRedirect('/consultas');
+        $this->get('/')->assertRedirect('/portalcgnat/consultas');
     }
 
     public function test_query_portal_is_rendered(): void
     {
-        $this->get('/consultas')
+        $this->get('/portalcgnat/consultas')
             ->assertOk()
             ->assertSee('Portal CGNAT')
             ->assertSee('Consulta IPv4 PAT')
@@ -30,24 +31,24 @@ class QueryPortalTest extends TestCase
 
     public function test_query_requires_a_discriminating_filter(): void
     {
-        $this->from('/consultas')->post('/consultas', [
+        $this->from('/portalcgnat/consultas')->post('/portalcgnat/consultas', [
             'from' => '2026-08-04T09:00',
             'to' => '2026-08-04T10:00',
             'nodes' => ['ch01'],
             'limit' => 100,
-        ])->assertRedirect('/consultas')
+        ])->assertRedirect('/portalcgnat/consultas')
             ->assertSessionHasErrors('private_ip');
     }
 
     public function test_query_range_is_limited(): void
     {
-        $this->from('/consultas')->post('/consultas', [
+        $this->from('/portalcgnat/consultas')->post('/portalcgnat/consultas', [
             'from' => '2026-08-01T09:00',
             'to' => '2026-08-04T10:00',
             'nodes' => ['ch01'],
             'private_ip' => '10.10.10.10',
             'limit' => 100,
-        ])->assertRedirect('/consultas')
+        ])->assertRedirect('/portalcgnat/consultas')
             ->assertSessionHasErrors('to');
     }
 
@@ -55,7 +56,7 @@ class QueryPortalTest extends TestCase
     {
         config()->set('clickhouse.enabled', false);
 
-        $this->post('/consultas', [
+        $this->post('/portalcgnat/consultas', [
             'from' => '2026-08-04T09:00',
             'to' => '2026-08-04T10:00',
             'nodes' => ['ch01'],
@@ -75,12 +76,17 @@ class QueryPortalTest extends TestCase
         ]);
 
         Http::preventStrayRequests();
-        Http::fake([
-            'ch01.internal:8123/*' => Http::response($this->row('2026-08-04 09:10:00', 'event-01'), 200),
-            'ch02.internal:8123/*' => Http::response($this->row('2026-08-04 09:20:00', 'event-02'), 200),
-        ]);
+        Http::fake(function (\Illuminate\Http\Client\Request $request) {
+            if (str_contains($request->body(), 'count()')) {
+                return Http::response("{\"total\":1}\n", 200);
+            }
 
-        $this->post('/consultas', [
+            return str_contains($request->url(), 'ch01.internal')
+                ? Http::response($this->row('2026-08-04 09:10:00', 'event-01'), 200)
+                : Http::response($this->row('2026-08-04 09:20:00', 'event-02'), 200);
+        });
+
+        $this->post('/portalcgnat/consultas', [
             'from' => '2026-08-04T09:00',
             'to' => '2026-08-04T10:00',
             'nodes' => ['ch01', 'ch02'],
@@ -93,7 +99,7 @@ class QueryPortalTest extends TestCase
             ->assertSee('CH-02')
             ->assertSee('OK');
 
-        Http::assertSentCount(2);
+        Http::assertSentCount(4);
     }
 
     /**
