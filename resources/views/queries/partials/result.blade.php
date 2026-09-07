@@ -27,7 +27,7 @@
         </strong>
 
         <span>
-            Por superar {{ number_format($result['export_threshold'] ?? 500000) }} registros no se mostrará la tabla.
+            Por superar {{ number_format($result['export_threshold'] ?? 100000) }} registros no se mostrará la tabla.
             Genera el CSV y descárgalo luego desde Tareas y exportaciones.
         </span>
 

@@ -218,6 +218,9 @@ CLICKHOUSE_CH04_DATABASE=cgnat
 CLICKHOUSE_CH04_TABLE_PATTERN=huawei_cgn_nat_v2_%s
 CLICKHOUSE_CH04_VERIFY_TLS=false
 
+CLICKHOUSE_EXPORT_TIMEOUT=3600
+CLICKHOUSE_EXPORT_THRESHOLD=100000
+
 PORTAL_STORE_URL=http://IP_CLICKHOUSE_PERSISTENCIA:8123
 PORTAL_STORE_USERNAME=portal_cgnat
 PORTAL_STORE_PASSWORD=SECRETO_RUNTIME
@@ -422,6 +425,58 @@ journalctl -u portal-app -u portal-nginx -n 150 --no-pager
 podman logs --tail 150 portal-app
 podman exec portal-app php artisan about
 curl -fsS http://127.0.0.1:8080/health/live
+```
+
+### Una exportación no avanza o no genera el CSV
+
+El progreso se actualiza al terminar cada nodo ClickHouse, no por cada fila.
+Mientras se descarga el primer nodo puede permanecer en `0 %`. Revisar en este
+orden, sin volver a enviar la misma exportación:
+
+```bash
+systemctl status portal-worker portal-redis --no-pager
+journalctl -u portal-worker -n 200 --no-pager
+podman logs --tail 200 portal-worker
+
+podman exec portal-worker php artisan queue:monitor redis:default --max=1000000
+
+find /index2/portal-cgnat/exports -maxdepth 3 -type f -printf '%TY-%Tm-%Td %TH:%TM:%TS %10s %p\n' | sort | tail -30
+df -h /index2
+df -i /index2
+```
+
+Un archivo terminado en `.part` que aumenta de tamaño indica que ClickHouse
+todavía está transmitiendo ese nodo. Ejecutar dos veces, con algunos segundos
+de diferencia, para comparar:
+
+```bash
+find /index2/portal-cgnat/exports -type f -name '*.part' -printf '%10s %p\n'
+```
+
+Consultar el estado y el error persistido de las últimas tareas. Reemplazar
+`USUARIO_LDAP` y ejecutar contra el ClickHouse configurado en
+`PORTAL_STORE_URL`:
+
+```bash
+ch_query "SELECT id, argMax(state, version) AS state, argMax(total_rows, version) AS total_rows, argMax(processed_rows, version) AS processed_rows, argMax(progress, version) AS progress, argMax(filename, version) AS filename, argMax(error, version) AS error, max(updated_at) AS updated_at FROM portal_cgnat.export_tasks WHERE lower(username) = lower('USUARIO_LDAP') GROUP BY id ORDER BY updated_at DESC LIMIT 10 FORMAT Vertical"
+```
+
+Interpretación rápida:
+
+- `queued`: el worker no tomó la tarea; revisar Redis y `portal-worker`.
+- `running` en `0 %` con un `.part` creciente: el primer nodo sigue exportando.
+- `running` sin crecimiento: revisar `system.processes` y conectividad al nodo.
+- `failed`: la causa está en `error` y en el journal de `portal-worker`.
+- `completed` sin descarga: comprobar que `filename` exista físicamente y que
+  los volúmenes de `portal-app` y `portal-worker` apunten al mismo directorio.
+
+Para comprobar una consulta de exportación activa en cada servidor ClickHouse:
+
+```sql
+SELECT query_id, elapsed, read_rows, read_bytes, memory_usage, query
+FROM system.processes
+WHERE query ILIKE '%FORMAT CSV%'
+FORMAT Vertical;
 ```
 
 Comprobar ClickHouse desde el host:

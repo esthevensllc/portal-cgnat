@@ -31,7 +31,7 @@ class QueryController extends Controller
             $validated = $this->normalizedFilters($request);
             $search = CgnatSearch::fromValidated($validated);
             $isPagination = array_key_exists('known_total', $validated);
-            $threshold = (int) config('clickhouse.export_threshold', 500000);
+            $threshold = (int) config('clickhouse.export_threshold', 100000);
 
             if ($isPagination) {
                 $totalRows = (int) $validated['known_total'];
