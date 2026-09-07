@@ -55,8 +55,8 @@
                 </div>
 
                 <div class="field">
-                    <label for="private_ip">IP origen privada *</label>
-                    <input class="control" id="private_ip" name="private_ip" inputmode="decimal" placeholder="10.172.154.77" value="{{ old('private_ip', $values['private_ip'] ?? '') }}" required>
+                    <label for="private_ip">IP origen privada</label>
+                    <input class="control" id="private_ip" name="private_ip" inputmode="decimal" placeholder="10.172.154.77" value="{{ old('private_ip', $values['private_ip'] ?? '') }}">
                 </div>
 
                 <div class="field">

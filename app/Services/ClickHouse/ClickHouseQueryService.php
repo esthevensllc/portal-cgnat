@@ -256,15 +256,14 @@ SQL, $parameters];
             'start_time >= {from:DateTime}',
             'start_time <= {to:DateTime}',
             'router_ip = {router_ip:String}',
-            'private_ip = {private_ip:String}',
         ];
         $parameters = [
             'param_from' => $search->from->format('Y-m-d H:i:s'),
             'param_to' => $search->to->format('Y-m-d H:i:s'),
             'param_router_ip' => $search->routerIp,
-            'param_private_ip' => $search->privateIp,
         ];
         $filters = [
+            ['private_ip', $search->privateIp, 'private_ip = {private_ip:String}'],
             ['private_port', $search->privatePort, 'private_port = {private_port:UInt16}'],
             ['public_ip', $search->publicIp, 'public_ip = {public_ip:String}'],
             ['public_port_from', $search->publicPortFrom, 'public_port >= {public_port_from:UInt16}'],

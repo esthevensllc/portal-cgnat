@@ -29,7 +29,7 @@ class CgnatSearchRequest extends FormRequest
             'nodes' => ['nullable', 'array', 'min:1'],
             'nodes.*' => ['string', Rule::in($nodes)],
             'router_ip' => ['required', 'ipv4'],
-            'private_ip' => ['required', 'ipv4'],
+            'private_ip' => ['nullable', 'ipv4'],
             'private_port' => $port,
             'public_ip' => ['nullable', 'ipv4'],
             'public_port_from' => $port,
@@ -87,7 +87,6 @@ class CgnatSearchRequest extends FormRequest
             'to.after' => 'La fecha final debe ser posterior a la fecha inicial.',
             'router_ip.required' => 'El router es obligatorio.',
             'router_ip.ipv4' => 'El router debe contener una dirección IPv4 válida.',
-            'private_ip.required' => 'La IP origen es obligatoria.',
             'private_ip.ipv4' => 'La IP origen debe contener una dirección IPv4 válida.',
         ];
     }
