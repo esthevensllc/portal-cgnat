@@ -6,10 +6,8 @@ use RuntimeException;
 
 class LdapAuthenticationService
 {
-    /**
-     * @return array{username: string, display_name: string, email: string, groups: list<string>}|null
-     */
-    public function authenticate(string $username, string $password): ?array
+    /** @return array{status: string, principal: array{username: string, display_name: string, email: string, groups: list<string>}|null} */
+    public function authenticate(string $username, string $password): array
     {
         $this->assertConfigured();
 
@@ -19,7 +17,7 @@ class LdapAuthenticationService
 
         $username = trim($username);
         if ($username === '' || $password === '') {
-            return null;
+            return ['status' => 'invalid_credentials', 'principal' => null];
         }
 
         $connection = @ldap_connect((string) config('ldap.host'), (int) config('ldap.port'));
@@ -36,7 +34,7 @@ class LdapAuthenticationService
 
             if (! @ldap_bind($connection, $this->bindUsername($username), $password)) {
                 if (ldap_errno($connection) === 49) {
-                    return null;
+                    return ['status' => 'invalid_credentials', 'principal' => null];
                 }
 
                 throw new RuntimeException('LDAP rechazó la conexión: '.ldap_error($connection));
@@ -57,17 +55,17 @@ class LdapAuthenticationService
 
             $entries = ldap_get_entries($connection, $search);
             if (! is_array($entries) || (int) ($entries['count'] ?? 0) < 1) {
-                return null;
+                return ['status' => 'user_not_found', 'principal' => null];
             }
 
             $entry = $entries[0];
             if (! is_array($entry)) {
-                return null;
+                return ['status' => 'user_not_found', 'principal' => null];
             }
 
             $groups = $this->memberOf($entry);
             if (! $this->belongsToAllowedGroup($groups)) {
-                return null;
+                return ['status' => 'group_denied', 'principal' => null];
             }
 
             $canonicalUsername = trim((string) ($entry['samaccountname'][0] ?? $account));
@@ -75,10 +73,13 @@ class LdapAuthenticationService
             $email = trim((string) ($entry['mail'][0] ?? ''));
 
             return [
-                'username' => $canonicalUsername,
-                'display_name' => $displayName !== '' ? $displayName : $canonicalUsername,
-                'email' => $email,
-                'groups' => $groups,
+                'status' => 'authenticated',
+                'principal' => [
+                    'username' => $canonicalUsername,
+                    'display_name' => $displayName !== '' ? $displayName : $canonicalUsername,
+                    'email' => $email,
+                    'groups' => $groups,
+                ],
             ];
         } finally {
             @ldap_unbind($connection);

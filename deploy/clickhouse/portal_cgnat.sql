@@ -73,6 +73,29 @@ PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (occurred_at, username, request_id)
 TTL occurred_at + INTERVAL 365 DAY DELETE;
 
+CREATE TABLE IF NOT EXISTS portal_cgnat.audit_events
+(
+    event_id UUID,
+    occurred_at DateTime64(3, 'UTC'),
+    request_id UUID,
+    event_type LowCardinality(String),
+    outcome LowCardinality(String),
+    username String,
+    auth_provider LowCardinality(String),
+    source_ip String,
+    http_method LowCardinality(String),
+    route_name LowCardinality(String),
+    resource_type LowCardinality(String),
+    resource_id String,
+    elapsed_ms UInt32,
+    total_rows UInt64,
+    details_json String
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(occurred_at)
+ORDER BY (occurred_at, username, event_type, event_id)
+TTL occurred_at + INTERVAL 365 DAY DELETE;
+
 CREATE TABLE IF NOT EXISTS portal_cgnat.query_templates
 (
     id UUID,
@@ -119,6 +142,7 @@ INSERT INTO portal_cgnat.role_permissions VALUES
 ('cgnat_administrador', 'cgnat.templates', 1, now64(3), 'bootstrap'),
 ('cgnat_administrador', 'cgnat.nodes', 1, now64(3), 'bootstrap'),
 ('cgnat_administrador', 'cgnat.admin', 1, now64(3), 'bootstrap'),
+('cgnat_administrador', 'cgnat.audit.view', 1, now64(3), 'bootstrap'),
 ('cgnat_consultor', 'cgnat.query', 1, now64(3), 'bootstrap'),
 ('cgnat_consultor', 'cgnat.exports', 1, now64(3), 'bootstrap'),
 ('cgnat_consultor', 'cgnat.templates', 1, now64(3), 'bootstrap'),

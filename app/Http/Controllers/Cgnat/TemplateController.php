@@ -5,16 +5,21 @@ namespace App\Http\Controllers\Cgnat;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\CgnatSearchRequest;
 use App\Services\Portal\QueryTemplateRepository;
+use App\Services\Portal\PortalAuditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class TemplateController extends Controller
 {
-    public function store(CgnatSearchRequest $request, QueryTemplateRepository $templates): JsonResponse
+    public function store(CgnatSearchRequest $request, QueryTemplateRepository $templates, PortalAuditService $audit): JsonResponse
     {
         $data = $request->validate(['template_name' => ['required', 'string', 'max:80', 'regex:/^[\pL\pN _.-]+$/u']]);
         $filters = $this->normalizedFilters($request);
-        $templates->create((string) $request->session()->get('portal_auth.username'), $data['template_name'], $filters);
+        $username = (string) $request->session()->get('portal_auth.username');
+        $templateId = $templates->create($username, $data['template_name'], $filters);
+        $audit->record('template.created', 'success', $username, $request, [
+            'name' => $data['template_name'],
+        ], 'query_template', $templateId);
         return response()->json(['message' => 'Plantilla guardada correctamente.']);
     }
 

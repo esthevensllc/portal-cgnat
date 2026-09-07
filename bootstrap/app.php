@@ -12,6 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->web(append: [
+            \App\Http\Middleware\PortalRequestId::class,
+        ]);
+
         $middleware->alias([
             'portal.auth' => \App\Http\Middleware\PortalAuthenticate::class,
         ]);

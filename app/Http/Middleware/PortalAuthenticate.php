@@ -3,8 +3,10 @@
 namespace App\Http\Middleware;
 
 use App\Services\ClickHouse\PortalAuthorizationRepository;
+use App\Services\Portal\PortalAuditService;
 use Closure;
 use Illuminate\Http\Request;
+use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
 class PortalAuthenticate
@@ -13,6 +15,10 @@ class PortalAuthenticate
     {
         if (! (bool) config('ldap.enabled', true)) {
             $this->startTemporarySession($request);
+
+            if (! in_array($permission, (array) config('ldap.temporary_permissions', []), true)) {
+                abort(403, 'El acceso temporal no incluye este permiso.');
+            }
 
             return $next($request);
         }
@@ -32,9 +38,31 @@ class PortalAuthenticate
             return redirect()->guest(route('portal.login'));
         }
 
-        $permissions = app(PortalAuthorizationRepository::class)->permissions((string) $identity['username']);
+        try {
+            $permissions = app(PortalAuthorizationRepository::class)->permissions((string) $identity['username']);
+        } catch (RuntimeException $exception) {
+            report($exception);
+            app(PortalAuditService::class)->record(
+                'authorization.check',
+                'failure',
+                (string) $identity['username'],
+                $request,
+                ['reason' => 'authorization_store_unavailable'],
+            );
+            abort(503, 'No fue posible validar los permisos del portal.');
+        }
+
         if (! in_array($permission, $permissions, true)) {
-            $request->session()->forget('portal_auth');
+            app(PortalAuditService::class)->record(
+                'authorization.denied',
+                'denied',
+                (string) $identity['username'],
+                $request,
+                ['required_permission' => $permission],
+            );
+            if ($permission === 'cgnat.query') {
+                $request->session()->forget('portal_auth');
+            }
             abort(403, 'Tu rol para este portal fue retirado o está inactivo.');
         }
 
