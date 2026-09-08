@@ -15,10 +15,14 @@ class ClickHouseQueryService
 {
     private const PAGE_SIZE = 20;
 
+    /** @var array<string, bool> */
+    private array $tableAvailabilityCache = [];
+
     /** @return array{rows: list<array<string, mixed>>, nodes: array<string, array<string, mixed>>, partial: bool, elapsed_ms: int, has_more: bool, next_cursor: ?string, page_size: int} */
     public function search(CgnatSearch $search): array
     {
         $nodes = $this->nodes($search);
+        $this->ensureTablesAvailable($nodes, $search);
         $startedAt = hrtime(true);
         [$sql, $parameters] = $this->compileRows($search);
         $responses = $this->pool($nodes, $sql, $parameters, $search);
@@ -76,6 +80,7 @@ class ClickHouseQueryService
     public function count(CgnatSearch $search): array
     {
         $nodes = $this->nodes($search);
+        $this->ensureTablesAvailable($nodes, $search);
         $startedAt = hrtime(true);
         [$sql, $parameters] = $this->compileCount($search);
         $responses = $this->pool($nodes, $sql, $parameters, $search);
@@ -196,10 +201,259 @@ class ClickHouseQueryService
         return 'No fue posible completar la consulta. '.implode(' ', $messages);
     }
 
+    private function ensureTablesAvailable(array $nodes, CgnatSearch $search): void
+    {
+        $cacheKey = $this->tableAvailabilityCacheKey($nodes, $search);
+        if (isset($this->tableAvailabilityCache[$cacheKey])) {
+            return;
+        }
+
+        $expectedByNode = [];
+        foreach ($nodes as $name => $node) {
+            $expectedByNode[$name] = $this->expectedTables($search, $node);
+        }
+
+        $queryId = (string) Str::uuid();
+        $responses = Http::pool(function (Pool $pool) use ($nodes, $expectedByNode, $queryId): array {
+            $requests = [];
+
+            foreach ($nodes as $name => $node) {
+                if (blank($node['url'] ?? null)) {
+                    continue;
+                }
+
+                $tableNames = array_keys($expectedByNode[$name]);
+                $tableList = implode(', ', array_map(
+                    static fn (string $table): string => "'{$table}'",
+                    $tableNames,
+                ));
+
+                $sql = <<<SQL
+SELECT name
+FROM system.tables
+WHERE database = {database:String}
+  AND name IN ({$tableList})
+FORMAT JSONEachRow
+SQL;
+
+                $requests[] = $pool->as($name)
+                    ->withBasicAuth((string) $node['username'], (string) $node['password'])
+                    ->connectTimeout((int) config('clickhouse.connect_timeout', 3))
+                    ->timeout((int) config('clickhouse.query_timeout', 30))
+                    ->withOptions([
+                        'verify' => (bool) $node['verify_tls'],
+                        'query' => [
+                            'param_database' => (string) $node['database'],
+                            'query_id' => $queryId.'-tables-'.$name,
+                            'wait_end_of_query' => 1,
+                        ],
+                    ])
+                    ->withBody($sql, 'text/plain')
+                    ->post(rtrim((string) $node['url'], '/').'/');
+            }
+
+            return $requests;
+        });
+
+        $nodeErrors = [];
+        $missingByNode = [];
+
+        foreach ($nodes as $name => $node) {
+            $response = $responses[$name] ?? null;
+
+            if ($response instanceof ConnectionException) {
+                $nodeErrors[$name] = $this->connectionFailure($name, $node, $response);
+                continue;
+            }
+
+            if (! $response instanceof Response || ! $response->successful()) {
+                $nodeErrors[$name] = $this->responseFailure($name, $node, $response);
+                continue;
+            }
+
+            $available = collect(preg_split('/\R/', trim($response->body())))
+                ->filter()
+                ->map(fn (string $line): mixed => json_decode($line, true, flags: JSON_INVALID_UTF8_SUBSTITUTE))
+                ->filter(fn (mixed $row): bool => is_array($row) && is_string($row['name'] ?? null))
+                ->map(fn (array $row): string => (string) $row['name'])
+                ->values()
+                ->all();
+
+            $availableLookup = array_fill_keys($available, true);
+            $missingDates = [];
+
+            foreach ($expectedByNode[$name] as $table => $date) {
+                if (! isset($availableLookup[$table])) {
+                    $missingDates[] = $date;
+                }
+            }
+
+            if ($missingDates !== []) {
+                $missingByNode[$name] = array_values(array_unique($missingDates));
+            }
+        }
+
+        if ($nodeErrors !== []) {
+            throw new RuntimeException($this->failureMessage($nodeErrors));
+        }
+
+        if ($missingByNode !== []) {
+            throw new RuntimeException($this->missingTablesMessage($missingByNode, $nodes, $search));
+        }
+
+        $this->tableAvailabilityCache[$cacheKey] = true;
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $nodes
+     */
+    private function tableAvailabilityCacheKey(array $nodes, CgnatSearch $search): string
+    {
+        $signature = [];
+
+        foreach ($nodes as $name => $node) {
+            $signature[$name] = [
+                'url' => (string) ($node['url'] ?? ''),
+                'database' => (string) ($node['database'] ?? ''),
+                'table_pattern' => (string) ($node['table_pattern'] ?? ''),
+            ];
+        }
+
+        return hash('sha256', json_encode([
+            'from' => $search->from->format('Y-m-d'),
+            'to' => $search->to->format('Y-m-d'),
+            'nodes' => $signature,
+        ], JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * @param array<string, mixed> $node
+     * @return array<string, string> tabla => fecha dd/mm/YYYY
+     */
+    private function expectedTables(CgnatSearch $search, array $node): array
+    {
+        $database = (string) ($node['database'] ?? '');
+        if (! preg_match('/^[A-Za-z0-9_]+$/', $database)) {
+            throw new RuntimeException('El nombre de la base ClickHouse no es válido.');
+        }
+
+        $tables = [];
+        for ($day = $search->from->startOfDay(); $day <= $search->to->startOfDay(); $day = $day->addDay()) {
+            $table = sprintf((string) $node['table_pattern'], $day->format('Y_m_d'));
+
+            if (! preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+                throw new RuntimeException('El nombre de tabla ClickHouse no es válido.');
+            }
+
+            $tables[$table] = $day->format('d/m/Y');
+        }
+
+        return $tables;
+    }
+
+    /**
+     * @param array<string, list<string>> $missingByNode
+     * @param array<string, array<string, mixed>> $nodes
+     */
+    private function missingTablesMessage(array $missingByNode, array $nodes, CgnatSearch $search): string
+    {
+        $allExpectedDates = array_values(array_unique(array_values(
+            $this->expectedTables($search, reset($nodes)),
+        )));
+
+        $allNodesMissing = count($missingByNode) === count($nodes);
+        if ($allNodesMissing) {
+            foreach ($missingByNode as $dates) {
+                if ($dates !== $allExpectedDates) {
+                    $allNodesMissing = false;
+                    break;
+                }
+            }
+        }
+
+        $labels = array_map(
+            static fn (string $name) => (string) ($nodes[$name]['label'] ?? strtoupper($name)),
+            array_keys($missingByNode),
+        );
+
+        if ($allNodesMissing) {
+            if (count($allExpectedDates) === 1) {
+                return sprintf(
+                    'No existe la tabla de datos correspondiente a la fecha %s en los nodos consultados: %s.',
+                    $allExpectedDates[0],
+                    $this->formatSpanishList($labels),
+                );
+            }
+
+            return sprintf(
+                'No existen tablas disponibles para el rango de fechas %s al %s en los nodos consultados: %s.',
+                $search->from->format('d/m/Y'),
+                $search->to->format('d/m/Y'),
+                $this->formatSpanishList($labels),
+            );
+        }
+
+        $dateSets = array_map(
+            static fn (array $dates): string => json_encode(array_values($dates), JSON_THROW_ON_ERROR),
+            array_values($missingByNode),
+        );
+
+        if (count(array_unique($dateSets)) === 1) {
+            $dates = reset($missingByNode);
+
+            if (count($dates) === 1) {
+                return sprintf(
+                    'No existe la tabla de datos correspondiente a la fecha %s en los nodos: %s.',
+                    $dates[0],
+                    $this->formatSpanishList($labels),
+                );
+            }
+
+            return sprintf(
+                'No existen las tablas de datos correspondientes a las fechas %s en los nodos: %s.',
+                $this->formatSpanishList($dates),
+                $this->formatSpanishList($labels),
+            );
+        }
+
+        $details = [];
+        foreach ($missingByNode as $name => $dates) {
+            $label = (string) ($nodes[$name]['label'] ?? strtoupper($name));
+            $details[] = $label.': '.$this->formatSpanishList($dates);
+        }
+
+        return 'No existen todas las tablas de datos requeridas para el rango consultado. '
+            .'Fechas faltantes por nodo: '.implode('; ', $details).'.';
+    }
+
+    /** @param list<string> $values */
+    private function formatSpanishList(array $values): string
+    {
+        $values = array_values(array_filter($values, static fn (string $value): bool => $value !== ''));
+        $count = count($values);
+
+        if ($count === 0) {
+            return '';
+        }
+
+        if ($count === 1) {
+            return $values[0];
+        }
+
+        if ($count === 2) {
+            return $values[0].' y '.$values[1];
+        }
+
+        $last = array_pop($values);
+
+        return implode(', ', $values).' y '.$last;
+    }
+
     /** @param array<string, int> $perNode @param callable(int): void $progress */
     public function exportTo(CgnatSearch $search, string $destination, array $perNode, callable $progress): void
     {
         $nodes = $this->nodes($search);
+        $this->ensureTablesAvailable($nodes, $search);
         [$sql, $parameters] = $this->compileExport($search);
         $completed = 0;
         $headerWritten = false;
@@ -391,12 +645,9 @@ SQL;
     private function applyTables(string $sql, CgnatSearch $search, array $node): string
     {
         $tables = [];
-        for ($day = $search->from->startOfDay(); $day <= $search->to->startOfDay(); $day = $day->addDay()) {
-            $table = sprintf((string) $node['table_pattern'], $day->format('Y_m_d'));
-            $database = (string) $node['database'];
-            if (! preg_match('/^[A-Za-z0-9_]+$/', $table) || ! preg_match('/^[A-Za-z0-9_]+$/', $database)) {
-                throw new RuntimeException('El nombre de tabla o base ClickHouse no es válido.');
-            }
+        $database = (string) $node['database'];
+
+        foreach (array_keys($this->expectedTables($search, $node)) as $table) {
             $tables[] = sprintf(<<<'SQL'
 SELECT start_time, end_time, toString(router_ip) AS router_ip, router_port,
     toString(private_ip) AS private_ip, private_port, toString(public_ip) AS public_ip,
