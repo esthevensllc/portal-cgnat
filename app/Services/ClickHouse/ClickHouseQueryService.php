@@ -28,11 +28,11 @@ class ClickHouseQueryService
         foreach ($nodes as $name => $node) {
             $response = $responses[$name] ?? null;
             if ($response instanceof ConnectionException) {
-                $nodeStatus[$name] = ['ok' => false, 'message' => 'No fue posible conectar con el nodo.'];
+                $nodeStatus[$name] = $this->connectionFailure($name, $node, $response);
                 continue;
             }
             if (! $response instanceof Response || ! $response->successful()) {
-                $nodeStatus[$name] = ['ok' => false, 'message' => $this->responseError($response)];
+                $nodeStatus[$name] = $this->responseFailure($name, $node, $response);
                 continue;
             }
 
@@ -44,7 +44,7 @@ class ClickHouseQueryService
                 ->values()
                 ->all();
             array_push($rows, ...$decoded);
-            $nodeStatus[$name] = ['ok' => true, 'rows' => count($decoded)];
+            $nodeStatus[$name] = ['ok' => true, 'label' => (string) $node['label'], 'rows' => count($decoded)];
         }
 
         usort($rows, fn (array $left, array $right): int => $this->rowSortKey($right) <=> $this->rowSortKey($left));
@@ -86,11 +86,11 @@ class ClickHouseQueryService
         foreach ($nodes as $name => $node) {
             $response = $responses[$name] ?? null;
             if ($response instanceof ConnectionException) {
-                $nodeStatus[$name] = ['ok' => false, 'message' => 'No fue posible conectar con el nodo.'];
+                $nodeStatus[$name] = $this->connectionFailure($name, $node, $response);
                 continue;
             }
             if (! $response instanceof Response || ! $response->successful()) {
-                $nodeStatus[$name] = ['ok' => false, 'message' => $this->responseError($response)];
+                $nodeStatus[$name] = $this->responseFailure($name, $node, $response);
                 continue;
             }
 
@@ -98,7 +98,7 @@ class ClickHouseQueryService
             $count = is_array($row) ? (int) ($row['total'] ?? 0) : 0;
             $total += $count;
             $perNode[$name] = $count;
-            $nodeStatus[$name] = ['ok' => true, 'rows' => $count];
+            $nodeStatus[$name] = ['ok' => true, 'label' => (string) $node['label'], 'rows' => $count];
         }
 
         return [
@@ -108,6 +108,92 @@ class ClickHouseQueryService
             'partial' => collect($nodeStatus)->contains(fn (array $status): bool => ! $status['ok']),
             'elapsed_ms' => (int) round((hrtime(true) - $startedAt) / 1_000_000),
         ];
+    }
+
+    /** @param array<string, array<string, mixed>> $nodeStatuses */
+    public function failureMessage(array $nodeStatuses): string
+    {
+        $failed = array_filter(
+            $nodeStatuses,
+            static fn (array $status): bool => ! (bool) ($status['ok'] ?? false),
+        );
+
+        if ($failed === []) {
+            return 'No fue posible completar la consulta en ClickHouse.';
+        }
+
+        $types = array_values(array_unique(array_map(
+            static fn (array $status): string => (string) ($status['type'] ?? 'query_error'),
+            $failed,
+        )));
+
+        $labels = array_values(array_unique(array_map(
+            static fn (array $status): string => (string) ($status['label'] ?? 'ClickHouse'),
+            $failed,
+        )));
+
+        if ($types === ['missing_table']) {
+            $dates = [];
+            foreach ($failed as $status) {
+                foreach ((array) ($status['dates'] ?? []) as $date) {
+                    if (is_string($date) && $date !== '') {
+                        $dates[] = $date;
+                    }
+                }
+            }
+            $dates = array_values(array_unique($dates));
+
+            if (count($dates) === 1) {
+                return sprintf(
+                    'No existe la tabla de datos correspondiente a la fecha %s en los nodos: %s.',
+                    $dates[0],
+                    implode(', ', $labels),
+                );
+            }
+
+            if ($dates !== []) {
+                return sprintf(
+                    'No existen las tablas de datos correspondientes a las fechas %s en los nodos: %s.',
+                    implode(', ', $dates),
+                    implode(', ', $labels),
+                );
+            }
+
+            return sprintf(
+                'No existen una o más tablas de datos para el rango de fechas consultado en los nodos: %s.',
+                implode(', ', $labels),
+            );
+        }
+
+        if ($types === ['connection']) {
+            return sprintf(
+                'No fue posible establecer conexión con los nodos ClickHouse: %s.',
+                implode(', ', $labels),
+            );
+        }
+
+        if ($types === ['timeout']) {
+            return sprintf(
+                'Los nodos ClickHouse %s excedieron el tiempo máximo de respuesta.',
+                implode(', ', $labels),
+            );
+        }
+
+        if ($types === ['authentication']) {
+            return sprintf(
+                'Los nodos ClickHouse %s rechazaron las credenciales de conexión.',
+                implode(', ', $labels),
+            );
+        }
+
+        $messages = [];
+        foreach ($failed as $status) {
+            $label = (string) ($status['label'] ?? 'ClickHouse');
+            $message = (string) ($status['message'] ?? 'El nodo devolvió un error al procesar la consulta.');
+            $messages[] = $label.': '.$message;
+        }
+
+        return 'No fue posible completar la consulta. '.implode(' ', $messages);
     }
 
     /** @param array<string, int> $perNode @param callable(int): void $progress */
@@ -403,6 +489,134 @@ SQL, $database, $table);
         } catch (Throwable $exception) {
             throw new RuntimeException('La paginación ya no es válida. Ejecuta nuevamente la consulta.', previous: $exception);
         }
+    }
+
+    /** @param array<string, mixed> $node @return array<string, mixed> */
+    private function connectionFailure(string $name, array $node, ConnectionException $exception): array
+    {
+        $detail = trim($exception->getMessage());
+        $normalized = Str::lower($detail);
+        $isTimeout = str_contains($normalized, 'timed out')
+            || str_contains($normalized, 'timeout')
+            || str_contains($normalized, 'curl error 28');
+
+        return [
+            'ok' => false,
+            'type' => $isTimeout ? 'timeout' : 'connection',
+            'label' => (string) ($node['label'] ?? strtoupper($name)),
+            'message' => $isTimeout
+                ? 'El nodo excedió el tiempo máximo de respuesta.'
+                : 'No fue posible establecer conexión con el nodo.',
+            'detail' => Str::limit($detail, 500),
+        ];
+    }
+
+    /** @param array<string, mixed> $node @return array<string, mixed> */
+    private function responseFailure(string $name, array $node, mixed $response): array
+    {
+        $label = (string) ($node['label'] ?? strtoupper($name));
+
+        if (blank($node['url'] ?? null)) {
+            return [
+                'ok' => false,
+                'type' => 'configuration',
+                'label' => $label,
+                'message' => 'El nodo no tiene una URL de conexión configurada.',
+                'detail' => '',
+            ];
+        }
+
+        if (! $response instanceof Response) {
+            return [
+                'ok' => false,
+                'type' => 'invalid_response',
+                'label' => $label,
+                'message' => 'El nodo no devolvió una respuesta válida.',
+                'detail' => '',
+            ];
+        }
+
+        $body = trim($response->body());
+        $normalized = Str::lower($body);
+        $status = $response->status();
+
+        if ($this->isMissingTableError($normalized)) {
+            $dates = $this->extractMissingTableDates($body);
+
+            return [
+                'ok' => false,
+                'type' => 'missing_table',
+                'label' => $label,
+                'dates' => $dates,
+                'message' => count($dates) === 1
+                    ? 'No existe la tabla de datos correspondiente a la fecha '.$dates[0].'.'
+                    : 'No existen una o más tablas de datos para el rango de fechas consultado.',
+                'detail' => Str::limit($body, 500),
+            ];
+        }
+
+        if (
+            in_array($status, [401, 403], true)
+            || str_contains($normalized, 'authentication failed')
+            || str_contains($normalized, 'password is incorrect')
+        ) {
+            return [
+                'ok' => false,
+                'type' => 'authentication',
+                'label' => $label,
+                'message' => 'El nodo rechazó las credenciales de conexión.',
+                'detail' => Str::limit($body, 500),
+            ];
+        }
+
+        if (
+            in_array($status, [408, 504], true)
+            || str_contains($normalized, 'timeout exceeded')
+            || str_contains($normalized, 'query execution timeout')
+        ) {
+            return [
+                'ok' => false,
+                'type' => 'timeout',
+                'label' => $label,
+                'message' => 'El nodo excedió el tiempo máximo de respuesta.',
+                'detail' => Str::limit($body, 500),
+            ];
+        }
+
+        return [
+            'ok' => false,
+            'type' => 'query_error',
+            'label' => $label,
+            'message' => 'El nodo devolvió un error al procesar la consulta.',
+            'detail' => Str::limit($body, 500),
+        ];
+    }
+
+    private function isMissingTableError(string $message): bool
+    {
+        return str_contains($message, 'unknown_table')
+            || str_contains($message, 'unknown table')
+            || str_contains($message, 'code: 60')
+            || (str_contains($message, 'table') && str_contains($message, "doesn't exist"))
+            || (str_contains($message, 'table') && str_contains($message, 'does not exist'));
+    }
+
+    /** @return list<string> */
+    private function extractMissingTableDates(string $message): array
+    {
+        preg_match_all(
+            '/huawei_cgn_nat_v2_(\d{4})_(\d{2})_(\d{2})/i',
+            $message,
+            $matches,
+            PREG_SET_ORDER,
+        );
+
+        $dates = [];
+        foreach ($matches as $match) {
+            $dates[] = sprintf('%s/%s/%s', $match[3], $match[2], $match[1]);
+        }
+
+        return array_values(array_unique($dates));
     }
 
     private function responseError(mixed $response): string

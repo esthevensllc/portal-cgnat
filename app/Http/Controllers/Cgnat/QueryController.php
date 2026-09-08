@@ -41,7 +41,7 @@ class QueryController extends Controller
                 $count = $service->count($search);
 
                 if ($count['partial']) {
-                    throw new RuntimeException('No se puede mostrar un resultado parcial: uno o más nodos ClickHouse no respondieron.');
+                    throw new RuntimeException($service->failureMessage($count['nodes']));
                 }
 
                 $totalRows = (int) $count['total'];
@@ -79,7 +79,7 @@ class QueryController extends Controller
                 $pageResult = $service->search($search);
 
                 if ($pageResult['partial']) {
-                    throw new RuntimeException('No se puede mostrar un resultado parcial: uno o más nodos ClickHouse no respondieron.');
+                    throw new RuntimeException($service->failureMessage($pageResult['nodes']));
                 }
 
                 $pageResult['large_result'] = false;
