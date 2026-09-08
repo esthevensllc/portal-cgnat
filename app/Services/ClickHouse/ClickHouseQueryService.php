@@ -449,8 +449,12 @@ SQL;
         return implode(', ', $values).' y '.$last;
     }
 
-    /** @param array<string, int> $perNode @param callable(int): void $progress */
-    public function exportTo(CgnatSearch $search, string $destination, array $perNode, callable $progress): void
+    /**
+     *
+     * @param array<string, int> $perNode
+     * @param callable(int): void $progress
+     */
+    public function exportTo(CgnatSearch $search, string $destination, array $perNode, callable $progress): int
     {
         $nodes = $this->nodes($search);
         $this->ensureTablesAvailable($nodes, $search);
@@ -458,43 +462,175 @@ SQL;
         $completed = 0;
         $headerWritten = false;
         $output = fopen($destination, 'wb');
+
         if ($output === false) {
             throw new RuntimeException('No fue posible crear el archivo CSV.');
         }
 
         try {
             foreach ($nodes as $name => $node) {
-                $part = $destination.'.'.$name.'.part';
-                $response = Http::sink($part)
-                    ->withBasicAuth((string) $node['username'], (string) $node['password'])
-                    ->connectTimeout((int) config('clickhouse.connect_timeout', 3))
-                    ->timeout((int) config('clickhouse.export_timeout', 3600))
-                    ->withOptions([
-                        'verify' => (bool) $node['verify_tls'],
-                        'query' => [...$parameters, 'database' => $node['database'], 'query_id' => (string) Str::uuid()],
-                    ])
-                    ->withBody($this->applyTables(str_replace('__FORMAT__', $headerWritten ? 'CSV' : 'CSVWithNames', $sql), $search, $node), 'text/plain')
-                    ->post(rtrim((string) $node['url'], '/').'/');
+                $expectedNodeRows = max(0, (int) ($perNode[$name] ?? 0));
+                $nodeRows = 0;
 
-                if (! $response->successful()) {
-                    @unlink($part);
-                    throw new RuntimeException('No fue posible exportar el nodo '.$node['label'].': '.$this->responseError($response));
+                $tables = array_reverse(array_keys($this->expectedTables($search, $node)));
+
+                foreach ($tables as $table) {
+                    $part = $destination.'.'.$name.'.'.$table.'.part';
+
+                    try {
+                        $format = $headerWritten ? 'CSV' : 'CSVWithNames';
+                        $query = str_replace('__FORMAT__', $format, $sql);
+
+                        $response = Http::sink($part)
+                            ->withBasicAuth((string) $node['username'], (string) $node['password'])
+                            ->connectTimeout((int) config('clickhouse.connect_timeout', 3))
+                            ->timeout((int) config('clickhouse.export_timeout', 3600))
+                            ->withOptions([
+                                'verify' => (bool) $node['verify_tls'],
+                                'query' => [
+                                    ...$parameters,
+                                    'database' => $node['database'],
+                                    'query_id' => (string) Str::uuid(),
+                                ],
+                            ])
+                            ->withBody($this->applySingleTable($query, $node, $table), 'text/plain')
+                            ->post(rtrim((string) $node['url'], '/').'/');
+
+                        if (! $response->successful()) {
+                            throw new RuntimeException(
+                                'No fue posible exportar el nodo '.$node['label'].': '.$this->responseError($response)
+                            );
+                        }
+
+                        $partRows = $this->appendCsvPart(
+                            $part,
+                            $output,
+                            ! $headerWritten,
+                            (string) $node['label'],
+                        );
+
+                        $headerWritten = true;
+                        $nodeRows += $partRows;
+                        $completed += $partRows;
+                        $progress($completed);
+                    } finally {
+                        @unlink($part);
+                    }
                 }
 
-                $input = fopen($part, 'rb');
-                if ($input === false) {
-                    throw new RuntimeException('No fue posible leer una parte del CSV generado.');
+                if ($nodeRows < $expectedNodeRows) {
+                    throw new RuntimeException(sprintf(
+                        'La exportación del nodo %s quedó incompleta: se esperaban %s registros y se escribieron %s.',
+                        (string) $node['label'],
+                        number_format($expectedNodeRows, 0, '.', ','),
+                        number_format($nodeRows, 0, '.', ','),
+                    ));
                 }
-                stream_copy_to_stream($input, $output);
-                fclose($input);
-                @unlink($part);
-                $headerWritten = true;
-                $completed += $perNode[$name] ?? 0;
-                $progress($completed);
             }
+
+            $expectedTotal = array_sum(array_map('intval', $perNode));
+            if ($expectedTotal > 0 && $completed === 0) {
+                throw new RuntimeException(sprintf(
+                    'La exportación no generó registros aunque la consulta reportó %s registros.',
+                    number_format($expectedTotal, 0, '.', ','),
+                ));
+            }
+
+            return $completed;
         } finally {
             fclose($output);
         }
+    }
+
+    /**
+     *
+     * @param array<string, mixed> $node
+     */
+    private function applySingleTable(string $sql, array $node, string $table): string
+    {
+        $database = (string) $node['database'];
+
+        if (! preg_match('/^[A-Za-z0-9_]+$/', $database)) {
+            throw new RuntimeException('El nombre de la base ClickHouse no es válido.');
+        }
+
+        if (! preg_match('/^[A-Za-z0-9_]+$/', $table)) {
+            throw new RuntimeException('El nombre de tabla ClickHouse no es válido.');
+        }
+
+        $tableSql = sprintf(<<<'SQL'
+SELECT start_time, end_time, toString(router_ip) AS router_ip, router_port,
+    toString(private_ip) AS private_ip, private_port, toString(public_ip) AS public_ip,
+    public_port, toString(destination_ip) AS destination_ip, destination_port, packet_size
+FROM `%s`.`%s`
+SQL, $database, $table);
+
+        return str_replace('__TABLES__', $tableSql, $sql);
+    }
+
+    /**
+     *
+     * @param resource $output
+     */
+    private function appendCsvPart(string $part, $output, bool $containsHeader, string $nodeLabel): int
+    {
+        $input = fopen($part, 'rb');
+        if ($input === false) {
+            throw new RuntimeException('No fue posible leer una parte del CSV generado.');
+        }
+
+        $lineCount = 0;
+        $bytes = 0;
+        $lastByte = '';
+        $probeTail = '';
+
+        try {
+            while (! feof($input)) {
+                $chunk = fread($input, 1024 * 1024);
+                if ($chunk === false) {
+                    throw new RuntimeException('No fue posible leer una parte del CSV generado.');
+                }
+
+                if ($chunk === '') {
+                    continue;
+                }
+
+                $bytes += strlen($chunk);
+                $lineCount += substr_count($chunk, "\n");
+                $lastByte = substr($chunk, -1);
+
+                $probe = $probeTail.$chunk;
+                $normalizedProbe = Str::lower($probe);
+                if (str_contains($normalizedProbe, 'db::exception')) {
+                    throw new RuntimeException(
+                        'ClickHouse interrumpió la exportación del nodo '.$nodeLabel.' durante la generación del CSV.'
+                    );
+                }
+                $probeTail = substr($probe, -2048);
+
+                $offset = 0;
+                $length = strlen($chunk);
+                while ($offset < $length) {
+                    $written = fwrite($output, substr($chunk, $offset));
+                    if ($written === false || $written === 0) {
+                        throw new RuntimeException('No fue posible escribir el archivo CSV final.');
+                    }
+                    $offset += $written;
+                }
+            }
+        } finally {
+            fclose($input);
+        }
+
+        if ($bytes === 0) {
+            return 0;
+        }
+
+        if ($lastByte !== "\n") {
+            $lineCount++;
+        }
+
+        return max(0, $lineCount - ($containsHeader ? 1 : 0));
     }
 
     /** @return array<string, array<string, mixed>> */

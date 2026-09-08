@@ -43,19 +43,56 @@ class GenerateCgnatExport implements ShouldQueue
         $tasks->update($this->taskId, $this->username, 'running', $this->totalRows, 0);
         $audit->record('export.started', 'success', $this->username, resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
 
+        $processedRows = 0;
+
         try {
-            $clickhouse->exportTo($search, $path, $this->perNode, function (int $processed) use ($tasks): void {
-                $tasks->update($this->taskId, $this->username, 'running', $this->totalRows, $processed);
-            });
-            $tasks->update($this->taskId, $this->username, 'completed', $this->totalRows, $this->totalRows, $filename);
+            $processedRows = $clickhouse->exportTo(
+                $search,
+                $path,
+                $this->perNode,
+                function (int $processed) use ($tasks, &$processedRows): void {
+                    $processedRows = $processed;
+                    $tasks->update($this->taskId, $this->username, 'running', $this->totalRows, $processed);
+                },
+            );
+
+            if ($this->totalRows > 0 && $processedRows === 0) {
+                throw new RuntimeException(sprintf(
+                    'La exportación no generó registros aunque la consulta reportó %s registros.',
+                    number_format($this->totalRows, 0, '.', ','),
+                ));
+            }
+
+            $finalTotalRows = max($this->totalRows, $processedRows);
+
+            $tasks->update(
+                $this->taskId,
+                $this->username,
+                'completed',
+                $finalTotalRows,
+                $processedRows,
+                $filename,
+            );
+
             $audit->record('export.completed', 'success', $this->username, details: [
                 'filename' => $filename,
-            ], resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
+                'expected_rows' => $this->totalRows,
+                'exported_rows' => $processedRows,
+            ], resourceType: 'export_task', resourceId: $this->taskId, totalRows: $processedRows);
         } catch (Throwable $exception) {
             @unlink($path);
-            $tasks->update($this->taskId, $this->username, 'failed', $this->totalRows, 0, '', $exception->getMessage());
+            $tasks->update(
+                $this->taskId,
+                $this->username,
+                'failed',
+                $this->totalRows,
+                $processedRows,
+                '',
+                $exception->getMessage(),
+            );
             $audit->record('export.failed', 'failure', $this->username, details: [
                 'reason' => mb_substr($exception->getMessage(), 0, 1000),
+                'processed_rows' => $processedRows,
             ], resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
             throw $exception;
         }
