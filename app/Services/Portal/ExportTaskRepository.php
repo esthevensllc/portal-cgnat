@@ -41,13 +41,21 @@ class ExportTaskRepository
         $now = now()->format('Y-m-d H:i:s.v');
         $createdAt = $this->originalCreatedAt($id, $username, $now);
 
+        $progress = match ($state) {
+            'completed' => 100,
+            'compressing' => 95,
+            default => $totalRows > 0
+                ? min(95, (int) floor(($processedRows / $totalRows) * 95))
+                : 0,
+        };
+
         $this->store->insertJson('export_tasks', [
             'id' => $id,
             'username' => mb_strtolower($username),
             'state' => $state,
             'total_rows' => $totalRows,
             'processed_rows' => $processedRows,
-            'progress' => $totalRows > 0 ? min(100, (int) floor(($processedRows / $totalRows) * 100)) : 0,
+            'progress' => $progress,
             'filename' => $filename,
             'filters_json' => '',
             'error' => $error,

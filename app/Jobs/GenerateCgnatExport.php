@@ -72,6 +72,14 @@ class GenerateCgnatExport implements ShouldQueue
                 throw new RuntimeException('El CSV generado está vacío y no puede comprimirse.');
             }
 
+            $tasks->update(
+                $this->taskId,
+                $this->username,
+                'compressing',
+                $this->totalRows,
+                $processedRows,
+            );
+
             $this->compressCsv($csvPath, $csvFilename, $zipPath);
 
             $zipBytes = filesize($zipPath);
