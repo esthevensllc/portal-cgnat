@@ -26,10 +26,20 @@
             La consulta encontró {{ number_format($result['total_rows']) }} registros.
         </strong>
 
-        <span>
-            Por superar {{ number_format($result['export_threshold'] ?? 100000) }} registros no se mostrará la tabla.
-            Genera la exportación y descarga luego el ZIP con el CSV desde Tareas y exportaciones.
-        </span>
+        @if ($result['export_limited'] ?? false)
+            <span>
+                El límite máximo de exportación es de
+                <strong>{{ number_format((int) ($result['export_max_rows'] ?? 60000000)) }}</strong>
+                registros. El ZIP contendrá únicamente los primeros
+                <strong>{{ number_format((int) ($result['export_max_rows'] ?? 60000000)) }}</strong>
+                registros de la consulta.
+            </span>
+        @else
+            <span>
+                Por superar {{ number_format($result['export_threshold'] ?? 100000) }} registros no se mostrará la tabla.
+                Genera la exportación y descarga luego el ZIP con el CSV desde Tareas y exportaciones.
+            </span>
+        @endif
 
         <button class="btn btn--primary" type="button" data-export-button>
             Generar ZIP
@@ -48,7 +58,13 @@
 
     <div class="result-actions">
         <button class="btn btn--secondary" type="button" data-export-button>⇩ Generar ZIP</button>
-        <span>El archivo se preparará en segundo plano.</span>
+        @if ($result['export_limited'] ?? false)
+            <span>
+                Se exportarán como máximo {{ number_format((int) ($result['export_max_rows'] ?? 60000000)) }} registros.
+            </span>
+        @else
+            <span>El archivo se preparará en segundo plano.</span>
+        @endif
     </div>
 
     <div class="table-wrap">

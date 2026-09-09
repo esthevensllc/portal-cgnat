@@ -32,6 +32,7 @@ class QueryController extends Controller
             $search = CgnatSearch::fromValidated($validated);
             $isPagination = array_key_exists('known_total', $validated);
             $threshold = (int) config('clickhouse.export_threshold', 100000);
+            $exportMaxRows = max(1, (int) config('clickhouse.export_max_rows', 60000000));
 
             if ($isPagination) {
                 $totalRows = (int) $validated['known_total'];
@@ -50,6 +51,7 @@ class QueryController extends Controller
             }
 
             $largeResult = $totalRows > $threshold;
+            $exportLimited = $totalRows > $exportMaxRows;
 
             if ($largeResult) {
                 $pageResult = [
@@ -90,6 +92,8 @@ class QueryController extends Controller
                 ...$pageResult,
                 'total_rows' => $totalRows,
                 'elapsed_ms' => $countElapsed + (int) ($pageResult['elapsed_ms'] ?? 0),
+                'export_max_rows' => $exportMaxRows,
+                'export_limited' => $exportLimited,
             ];
 
             if (! $isPagination) {
@@ -102,6 +106,8 @@ class QueryController extends Controller
                     'total_rows' => $totalRows,
                     'large_result' => $largeResult,
                     'export_threshold' => $threshold,
+                    'export_max_rows' => $exportMaxRows,
+                    'export_limited' => $exportLimited,
                 ]);
             }
 

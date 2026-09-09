@@ -28,13 +28,44 @@ class ExportController extends Controller
             if ($count['partial']) {
                 throw new RuntimeException('No se puede generar una exportación parcial: uno o más nodos ClickHouse no respondieron.');
             }
-            $taskId = $tasks->create($username, $search, $count['total']);
-            GenerateCgnatExport::dispatch($taskId, $username, $search->toArray(), $count['total'], $count['per_node']);
+
+            $totalFound = max(0, (int) $count['total']);
+            $exportMaxRows = max(1, (int) config('clickhouse.export_max_rows', 60000000));
+            $exportRows = min($totalFound, $exportMaxRows);
+            $exportLimited = $totalFound > $exportMaxRows;
+            $limitedPerNode = $this->limitPerNode((array) $count['per_node'], $exportRows);
+
+            $taskId = $tasks->create($username, $search, $exportRows);
+            GenerateCgnatExport::dispatch($taskId, $username, $search->toArray(), $exportRows, $limitedPerNode);
+
             $audit->record('export.queued', 'success', $username, $request, [
                 'selected_nodes' => $search->nodes,
-            ], 'export_task', $taskId, $count['elapsed_ms'], $count['total']);
-            $message = 'La exportación fue enviada a Tareas y exportaciones. Al finalizar podrás descargar un ZIP con el CSV.';
-            return $request->expectsJson() ? response()->json(['message' => $message, 'task_id' => $taskId], 202) : redirect()->route('exports.index')->with('status', $message);
+                'query_total_rows' => $totalFound,
+                'export_rows' => $exportRows,
+                'export_max_rows' => $exportMaxRows,
+                'export_limited' => $exportLimited,
+            ], 'export_task', $taskId, $count['elapsed_ms'], $exportRows);
+
+            $message = $exportLimited
+                ? sprintf(
+                    'La consulta encontró %s registros. Por el límite máximo configurado se exportarán únicamente los primeros %s registros. La exportación fue enviada a Tareas y exportaciones.',
+                    number_format($totalFound, 0, '.', ','),
+                    number_format($exportRows, 0, '.', ','),
+                )
+                : 'La exportación fue enviada a Tareas y exportaciones. Al finalizar podrás descargar un ZIP con el CSV.';
+
+            $payload = [
+                'message' => $message,
+                'task_id' => $taskId,
+                'total_rows' => $totalFound,
+                'export_rows' => $exportRows,
+                'export_max_rows' => $exportMaxRows,
+                'export_limited' => $exportLimited,
+            ];
+
+            return $request->expectsJson()
+                ? response()->json($payload, 202)
+                : redirect()->route('exports.index')->with('status', $message);
         } catch (RuntimeException $exception) {
             $audit->record('export.request', 'failure', $username, $request, [
                 'reason' => mb_substr($exception->getMessage(), 0, 1000),
@@ -70,6 +101,30 @@ class ExportController extends Controller
         $contentType = $extension === 'zip' ? 'application/zip' : 'text/csv; charset=UTF-8';
 
         return response()->download($path, (string) $task['filename'], ['Content-Type' => $contentType]);
+    }
+
+    /**
+     *
+     * @param array<string, int|numeric-string> $perNode
+     * @return array<string, int>
+     */
+    private function limitPerNode(array $perNode, int $maxRows): array
+    {
+        $remaining = max(0, $maxRows);
+        $limited = [];
+
+        foreach ($perNode as $name => $rows) {
+            $available = max(0, (int) $rows);
+            $take = min($available, $remaining);
+            $limited[(string) $name] = $take;
+            $remaining -= $take;
+
+            if ($remaining <= 0) {
+                $remaining = 0;
+            }
+        }
+
+        return $limited;
     }
 
     /** @return array<string, mixed> */

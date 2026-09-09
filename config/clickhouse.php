@@ -31,5 +31,6 @@ return [
     'max_interactive_hours' => (int) env('CLICKHOUSE_MAX_INTERACTIVE_HOURS', 168),
     'page_size' => (int) env('CLICKHOUSE_PAGE_SIZE', 100),
     'export_threshold' => (int) env('CLICKHOUSE_EXPORT_THRESHOLD', 100000),
+    'export_max_rows' => max(1, (int) env('CLICKHOUSE_EXPORT_MAX_ROWS', 60000000)),
     'nodes' => $nodes,
 ];

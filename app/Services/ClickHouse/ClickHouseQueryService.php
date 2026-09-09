@@ -472,14 +472,27 @@ SQL;
                 $expectedNodeRows = max(0, (int) ($perNode[$name] ?? 0));
                 $nodeRows = 0;
 
+                if ($expectedNodeRows === 0) {
+                    continue;
+                }
+
                 $tables = array_reverse(array_keys($this->expectedTables($search, $node)));
 
                 foreach ($tables as $table) {
+                    $remainingNodeRows = $expectedNodeRows - $nodeRows;
+                    if ($remainingNodeRows <= 0) {
+                        break;
+                    }
+
                     $part = $destination.'.'.$name.'.'.$table.'.part';
 
                     try {
                         $format = $headerWritten ? 'CSV' : 'CSVWithNames';
-                        $query = str_replace('__FORMAT__', $format, $sql);
+                        $query = str_replace(
+                            ['__LIMIT__', '__FORMAT__'],
+                            [(string) $remainingNodeRows, $format],
+                            $sql,
+                        );
 
                         $response = Http::sink($part)
                             ->withBasicAuth((string) $node['username'], (string) $node['password'])
@@ -721,6 +734,7 @@ SELECT start_time, end_time, router_ip, router_port,
 FROM (__TABLES__)
 WHERE {$where}
 ORDER BY start_time DESC, end_time DESC
+LIMIT __LIMIT__
 FORMAT __FORMAT__
 SQL, $parameters];
     }
