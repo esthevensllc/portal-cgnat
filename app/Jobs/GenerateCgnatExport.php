@@ -13,6 +13,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use RuntimeException;
 use Throwable;
+use ZipArchive;
 
 class GenerateCgnatExport implements ShouldQueue
 {
@@ -38,8 +39,11 @@ class GenerateCgnatExport implements ShouldQueue
             throw new RuntimeException('No fue posible preparar el directorio de exportación.');
         }
 
-        $filename = sprintf('cgnat-%s-%s.csv', now()->format('Ymd-His'), $this->taskId);
-        $path = $directory.'/'.$filename;
+        $baseName = sprintf('cgnat-%s-%s', now()->format('Ymd-His'), $this->taskId);
+        $csvFilename = $baseName.'.csv';
+        $zipFilename = $baseName.'.zip';
+        $csvPath = $directory.'/'.$csvFilename;
+        $zipPath = $directory.'/'.$zipFilename;
         $tasks->update($this->taskId, $this->username, 'running', $this->totalRows, 0);
         $audit->record('export.started', 'success', $this->username, resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
 
@@ -48,7 +52,7 @@ class GenerateCgnatExport implements ShouldQueue
         try {
             $processedRows = $clickhouse->exportTo(
                 $search,
-                $path,
+                $csvPath,
                 $this->perNode,
                 function (int $processed) use ($tasks, &$processedRows): void {
                     $processedRows = $processed;
@@ -63,6 +67,22 @@ class GenerateCgnatExport implements ShouldQueue
                 ));
             }
 
+            $csvBytes = filesize($csvPath);
+            if ($csvBytes === false || $csvBytes <= 0) {
+                throw new RuntimeException('El CSV generado está vacío y no puede comprimirse.');
+            }
+
+            $this->compressCsv($csvPath, $csvFilename, $zipPath);
+
+            $zipBytes = filesize($zipPath);
+            if ($zipBytes === false || $zipBytes <= 0) {
+                throw new RuntimeException('No fue posible validar el archivo ZIP generado.');
+            }
+
+            if (! @unlink($csvPath) && is_file($csvPath)) {
+                throw new RuntimeException('El ZIP fue generado, pero no fue posible eliminar el CSV temporal.');
+            }
+
             $finalTotalRows = max($this->totalRows, $processedRows);
 
             $tasks->update(
@@ -71,16 +91,20 @@ class GenerateCgnatExport implements ShouldQueue
                 'completed',
                 $finalTotalRows,
                 $processedRows,
-                $filename,
+                $zipFilename,
             );
 
             $audit->record('export.completed', 'success', $this->username, details: [
-                'filename' => $filename,
+                'filename' => $zipFilename,
+                'csv_filename' => $csvFilename,
                 'expected_rows' => $this->totalRows,
                 'exported_rows' => $processedRows,
+                'csv_bytes' => $csvBytes,
+                'zip_bytes' => $zipBytes,
             ], resourceType: 'export_task', resourceId: $this->taskId, totalRows: $processedRows);
         } catch (Throwable $exception) {
-            @unlink($path);
+            @unlink($csvPath);
+            @unlink($zipPath);
             $tasks->update(
                 $this->taskId,
                 $this->username,
@@ -97,4 +121,35 @@ class GenerateCgnatExport implements ShouldQueue
             throw $exception;
         }
     }
+    private function compressCsv(string $csvPath, string $csvFilename, string $zipPath): void
+    {
+        if (! class_exists(ZipArchive::class)) {
+            throw new RuntimeException('La extensión ZIP de PHP no está disponible en el worker.');
+        }
+
+        $zip = new ZipArchive();
+        $result = $zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE);
+
+        if ($result !== true) {
+            throw new RuntimeException('No fue posible crear el archivo ZIP de la exportación.');
+        }
+
+        try {
+            if (! $zip->addFile($csvPath, $csvFilename)) {
+                throw new RuntimeException('No fue posible agregar el CSV al archivo ZIP.');
+            }
+
+            if (method_exists($zip, 'setCompressionName')) {
+                $zip->setCompressionName($csvFilename, ZipArchive::CM_DEFLATE);
+            }
+        } catch (Throwable $exception) {
+            $zip->close();
+            throw $exception;
+        }
+
+        if (! $zip->close()) {
+            throw new RuntimeException('No fue posible finalizar el archivo ZIP de la exportación.');
+        }
+    }
+
 }

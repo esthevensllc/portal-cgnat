@@ -33,7 +33,7 @@ class ExportController extends Controller
             $audit->record('export.queued', 'success', $username, $request, [
                 'selected_nodes' => $search->nodes,
             ], 'export_task', $taskId, $count['elapsed_ms'], $count['total']);
-            $message = 'El CSV fue enviado a Tareas y exportaciones. Puedes continuar trabajando mientras se genera.';
+            $message = 'La exportación fue enviada a Tareas y exportaciones. Al finalizar podrás descargar un ZIP con el CSV.';
             return $request->expectsJson() ? response()->json(['message' => $message, 'task_id' => $taskId], 202) : redirect()->route('exports.index')->with('status', $message);
         } catch (RuntimeException $exception) {
             $audit->record('export.request', 'failure', $username, $request, [
@@ -66,7 +66,10 @@ class ExportController extends Controller
             $id,
         );
 
-        return response()->download($path, (string) $task['filename'], ['Content-Type' => 'text/csv; charset=UTF-8']);
+        $extension = strtolower((string) pathinfo((string) $task['filename'], PATHINFO_EXTENSION));
+        $contentType = $extension === 'zip' ? 'application/zip' : 'text/csv; charset=UTF-8';
+
+        return response()->download($path, (string) $task['filename'], ['Content-Type' => $contentType]);
     }
 
     /** @return array<string, mixed> */

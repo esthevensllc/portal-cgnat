@@ -28,11 +28,11 @@
 
         <span>
             Por superar {{ number_format($result['export_threshold'] ?? 100000) }} registros no se mostrará la tabla.
-            Genera el CSV y descárgalo luego desde Tareas y exportaciones.
+            Genera la exportación y descarga luego el ZIP con el CSV desde Tareas y exportaciones.
         </span>
 
         <button class="btn btn--primary" type="button" data-export-button>
-            Generar CSV
+            Generar ZIP
         </button>
     </div>
 @elseif ($result && count($result['rows']))
@@ -47,7 +47,7 @@
     @endphp
 
     <div class="result-actions">
-        <button class="btn btn--secondary" type="button" data-export-button>⇩ Generar CSV</button>
+        <button class="btn btn--secondary" type="button" data-export-button>⇩ Generar ZIP</button>
         <span>El archivo se preparará en segundo plano.</span>
     </div>
 
