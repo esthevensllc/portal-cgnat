@@ -113,7 +113,7 @@ class PortalLoginController extends Controller
 
             return back()
                 ->withInput($request->only('username'))
-                ->withErrors(['username' => 'Tu cuenta LDAP es válida, pero no tiene un rol activo para este portal.']);
+                ->withErrors(['username' => 'No tiene un rol activo para este portal.']);
         }
 
         $request->session()->regenerate();
