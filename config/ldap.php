@@ -18,7 +18,6 @@ return [
     'domain' => trim((string) env('LDAP_DOMAIN', 'TIM')),
     'allowed_group' => filled(env('LDAP_ALLOWED_GROUP')) ? (string) env('LDAP_ALLOWED_GROUP') : null,
     'timeout' => (int) env('LDAP_TIMEOUT', 10),
-    'allowed_group' => env('LDAP_ALLOWED_GROUP'),
 
     // Equivale al control de intentos que usa el proyecto de bajas.
     'max_attempts' => (int) env('LDAP_LOGIN_MAX_ATTEMPTS', 5),
