@@ -79,9 +79,15 @@ class PortalLoginController extends Controller
                 'reason' => $authentication['status'],
             ]);
 
+            $message = match ($authentication['status']) {
+                'group_denied' => 'No cuenta con permisos para el Portal',
+                'user_not_found', 'invalid_credentials' => 'Usuario o contraseña corporativa no válidos.',
+                default => 'No fue posible iniciar sesión.',
+            };
+
             return back()
                 ->withInput($request->only('username'))
-                ->withErrors(['username' => 'Usuario o contraseña corporativa no válidos.']);
+                ->withErrors(['username' => $message]);
         }
 
         RateLimiter::clear($rateKey);
