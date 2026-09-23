@@ -17,7 +17,7 @@ class AuditController extends Controller
             'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
             'username' => ['nullable', 'string', 'max:100'],
             'event_type' => ['nullable', 'string', 'max:100'],
-            'outcome' => ['nullable', 'in:success,failure,denied,rate_limited'],
+            'outcome' => ['nullable', 'in:Correcto,Fallido,Pendiente'],
             'source_ip' => ['nullable', 'ip'],
             'request_id' => ['nullable', 'uuid'],
         ]);

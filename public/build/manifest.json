@@ -1,6 +1,6 @@
 {
   "resources/css/app.css": {
-    "file": "assets/app-C2QmLL-U.css",
+    "file": "assets/app-DUs0MCvi.css",
     "name": "app",
     "names": [
       "app.css"
@@ -8,8 +8,17 @@
     "src": "resources/css/app.css",
     "isEntry": true
   },
+  "resources/css/login-bootstrap.css": {
+    "file": "assets/login-bootstrap-CqLr8KVv.css",
+    "name": "login-bootstrap",
+    "names": [
+      "login-bootstrap.css"
+    ],
+    "src": "resources/css/login-bootstrap.css",
+    "isEntry": true
+  },
   "resources/js/app.js": {
-    "file": "assets/app-DIyOEWs8.js",
+    "file": "assets/app-DcHZaA9l.js",
     "name": "app",
     "src": "resources/js/app.js",
     "isEntry": true

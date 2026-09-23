@@ -81,8 +81,13 @@ CREATE TABLE IF NOT EXISTS portal_cgnat.audit_events
     event_type LowCardinality(String),
     outcome LowCardinality(String),
     username String,
+    user_description String,
     auth_provider LowCardinality(String),
     source_ip String,
+    source_hostname String,
+    destination_ip String,
+    destination_hostname String,
+    os_username String,
     http_method LowCardinality(String),
     route_name LowCardinality(String),
     resource_type LowCardinality(String),
@@ -95,6 +100,18 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (occurred_at, username, event_type, event_id)
 TTL occurred_at + INTERVAL 365 DAY DELETE;
+
+CREATE TABLE IF NOT EXISTS portal_cgnat.user_sessions
+(
+    username String,
+    session_hash String,
+    connected UInt8,
+    last_seen_at DateTime64(3, 'UTC'),
+    expires_at DateTime64(3, 'UTC'),
+    version UInt64
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY username;
 
 CREATE TABLE IF NOT EXISTS portal_cgnat.query_templates
 (

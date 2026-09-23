@@ -1,3 +1,10 @@
+import { Modal } from 'bootstrap';
+
+const activeSessionModal = document.querySelector('[data-active-session-modal]');
+if (activeSessionModal instanceof HTMLElement) {
+    new Modal(activeSessionModal, { backdrop: 'static', keyboard: false }).show();
+}
+
 document.querySelector('[data-menu-toggle]')?.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
 document.querySelector('[data-password-toggle]')?.addEventListener('click', (event) => {
     const button = event.currentTarget;

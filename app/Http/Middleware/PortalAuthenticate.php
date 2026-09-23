@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Services\ClickHouse\PortalAuthorizationRepository;
 use App\Services\Portal\PortalAuditService;
+use App\Services\Portal\PortalSessionRegistry;
 use Closure;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -39,6 +40,24 @@ class PortalAuthenticate
         }
 
         try {
+            $active = app(PortalSessionRegistry::class)->refresh($request, (string) $identity['username']);
+        } catch (\Throwable $exception) {
+            report($exception);
+            abort(503, 'No fue posible verificar la sesión activa.');
+        }
+
+        if (! $active) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            if ($request->expectsJson()) {
+                return response()->json(['message' => 'Tu sesión fue cerrada desde otro navegador o dispositivo.'], 401);
+            }
+
+            return redirect()->route('portal.login')->withErrors(['username' => 'Tu sesión fue cerrada desde otro navegador o dispositivo.']);
+        }
+
+        try {
             $permissions = app(PortalAuthorizationRepository::class)->permissions((string) $identity['username']);
         } catch (RuntimeException $exception) {
             report($exception);
@@ -61,6 +80,7 @@ class PortalAuthenticate
                 ['required_permission' => $permission],
             );
             if ($permission === 'cgnat.query') {
+                app(PortalSessionRegistry::class)->release($request, (string) $identity['username']);
                 $request->session()->forget('portal_auth');
             }
             abort(403, 'Tu rol para este portal fue retirado o está inactivo.');

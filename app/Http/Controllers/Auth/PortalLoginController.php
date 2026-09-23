@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Services\Auth\LdapAuthenticationService;
 use App\Services\ClickHouse\PortalAuthorizationRepository;
 use App\Services\Portal\PortalAuditService;
+use App\Services\Portal\PortalSessionRegistry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -25,7 +26,13 @@ class PortalLoginController extends Controller
             return redirect()->route('queries.index');
         }
 
-        return view('auth.login');
+        $pending = $request->session()->get('portal_pending_login');
+        $conflict = is_array($pending) && (int) ($pending['expires_at'] ?? 0) > now()->timestamp;
+        if (! $conflict) {
+            $request->session()->forget('portal_pending_login');
+        }
+
+        return view('auth.login', ['sessionConflict' => $conflict]);
     }
 
     public function login(
@@ -33,6 +40,7 @@ class PortalLoginController extends Controller
         LdapAuthenticationService $ldap,
         PortalAuthorizationRepository $authorization,
         PortalAuditService $audit,
+        PortalSessionRegistry $sessions,
     ): RedirectResponse {
         if (! (bool) config('ldap.enabled', true)) {
             return redirect()->route('queries.index');
@@ -116,7 +124,25 @@ class PortalLoginController extends Controller
                 ->withErrors(['username' => 'No tiene un rol activo para este portal.']);
         }
 
-        $request->session()->regenerate();
+        try {
+            if (! $sessions->claim($request, $principal['username'])) {
+                $request->session()->put('portal_pending_login', [
+                    'principal' => $principal,
+                    'permissions' => $permissions,
+                    'expires_at' => now()->addMinutes(5)->timestamp,
+                ]);
+                $audit->record('auth.login', 'pending', $principal['username'], $request, ['reason' => 'active_session']);
+
+                return redirect()->route('portal.login')->with('session_conflict', true);
+            }
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return back()->withInput($request->only('username'))
+                ->withErrors(['username' => 'No fue posible verificar las sesiones activas. Inténtalo nuevamente.']);
+        }
+
+        $request->session()->forget('portal_pending_login');
         $request->session()->put('portal_auth', [
             ...$principal,
             'permissions' => $permissions,
@@ -129,6 +155,42 @@ class PortalLoginController extends Controller
         ]);
 
         return redirect()->intended(route('queries.index'));
+    }
+
+    public function replace(Request $request, PortalSessionRegistry $sessions, PortalAuditService $audit): RedirectResponse
+    {
+        $pending = $request->session()->get('portal_pending_login');
+        if (! is_array($pending) || (int) ($pending['expires_at'] ?? 0) <= now()->timestamp) {
+            $request->session()->forget('portal_pending_login');
+
+            return redirect()->route('portal.login')->withErrors(['username' => 'La confirmación venció. Ingresa nuevamente.']);
+        }
+
+        $principal = $pending['principal'];
+        try {
+            $sessions->claim($request, (string) $principal['username'], true);
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            return redirect()->route('portal.login')->withErrors(['username' => 'No fue posible cerrar la otra sesión. Inténtalo nuevamente.']);
+        }
+
+        $request->session()->forget('portal_pending_login');
+        $request->session()->put('portal_auth', [
+            ...$principal,
+            'permissions' => $pending['permissions'],
+            'authenticated_at' => now()->toIso8601String(),
+        ]);
+        $audit->record('auth.other_sessions_closed', 'success', $principal['username'], $request);
+
+        return redirect()->route('queries.index');
+    }
+
+    public function cancel(Request $request): RedirectResponse
+    {
+        $request->session()->forget('portal_pending_login');
+
+        return redirect()->route('portal.login');
     }
 
     private function rateLimitKey(Request $request, string $username): string

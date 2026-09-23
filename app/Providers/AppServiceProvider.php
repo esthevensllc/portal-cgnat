@@ -31,6 +31,7 @@ class AppServiceProvider extends ServiceProvider
             app_path('Services/Portal/ExportTaskRepository.php'),
             app_path('Services/Portal/QueryTemplateRepository.php'),
             app_path('Services/Portal/PortalAuditService.php'),
+            app_path('Services/Portal/PortalSessionRegistry.php'),
             app_path('Services/Portal/AuditEventRepository.php'),
             app_path('Jobs/GenerateCgnatExport.php'),
         ] as $file) {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Ingresar | Portal CGNAT</title>
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/css/login-bootstrap.css', 'resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="login-page">
 <main class="login-card">
@@ -29,5 +29,19 @@
         <button class="btn btn--primary login-card__submit" type="submit">Iniciar sesión</button>
     </form>
 </main>
+@if ($sessionConflict)
+<div class="modal fade" id="activeSessionModal" tabindex="-1" aria-labelledby="activeSessionTitle" aria-describedby="activeSessionDescription" aria-hidden="true" data-active-session-modal>
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header"><h2 class="modal-title fs-5" id="activeSessionTitle">Sesión activa</h2></div>
+            <div class="modal-body" id="activeSessionDescription">Ya tienes una sesión iniciada en otro navegador o dispositivo. Para ingresar aquí, debes cerrar esa sesión.</div>
+            <div class="modal-footer">
+                <form method="POST" action="{{ route('portal.login.cancel') }}">@csrf<button class="btn btn--secondary" type="submit">Cancelar</button></form>
+                <form method="POST" action="{{ route('portal.login.replace') }}">@csrf<button class="btn btn--primary" type="submit">Cerrar otras sesiones</button></form>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
 </body>
 </html>

@@ -29,26 +29,53 @@ class PortalAuditService
                 $requestId = (string) Str::uuid();
             }
 
+            $hasTarget = filled($details['destination_ip'] ?? null);
+
             $this->store->insertJson('audit_events', [
                 'event_id' => (string) Str::uuid(),
                 'occurred_at' => now()->utc()->format('Y-m-d H:i:s.v'),
                 'request_id' => $requestId,
                 'event_type' => $eventType,
-                'outcome' => $outcome,
+                'outcome' => match ($outcome) {
+                    'success' => 'Correcto',
+                    'pending' => 'Pendiente',
+                    default => 'Fallido',
+                },
                 'username' => mb_strtolower(trim((string) $username)),
+                'user_description' => $request !== null && $request->hasSession()
+                    ? (string) $request->session()->get('portal_auth.display_name', '') : '',
                 'auth_provider' => config('ldap.enabled', true) ? 'ldap' : 'temporary',
                 'source_ip' => $request?->ip() ?? '',
+                'source_hostname' => (string) ($request?->server('REMOTE_HOST') ?? ''),
+                'destination_ip' => $hasTarget ? (string) $details['destination_ip'] : (string) ($request?->server('SERVER_ADDR') ?? ''),
+                'destination_hostname' => $hasTarget ? (string) ($details['destination_hostname'] ?? '') : ($request?->getHost() ?? ''),
+                'os_username' => $this->osUsername(),
                 'http_method' => $request?->method() ?? '',
                 'route_name' => $request?->route()?->getName() ?? '',
                 'resource_type' => $resourceType ?? '',
                 'resource_id' => $resourceId ?? '',
                 'elapsed_ms' => max(0, $elapsedMs ?? 0),
                 'total_rows' => max(0, $totalRows ?? 0),
-                'details_json' => json_encode($this->sanitize($details), JSON_THROW_ON_ERROR),
+                'details_json' => json_encode($this->sanitize([
+                    ...$details,
+                    ...($resourceType !== null ? ['resource_type' => $resourceType] : []),
+                    ...($resourceId !== null ? ['resource_id' => $resourceId] : []),
+                    ...($elapsedMs !== null ? ['elapsed_ms' => $elapsedMs] : []),
+                    ...($totalRows !== null ? ['total_rows' => $totalRows] : []),
+                ]), JSON_THROW_ON_ERROR),
             ]);
         } catch (Throwable $exception) {
             report($exception); // Una falla de auditoría no debe exponer datos ni bloquear la operación.
         }
+    }
+
+    private function osUsername(): string
+    {
+        if (function_exists('posix_getpwuid') && function_exists('posix_geteuid')) {
+            return (string) (posix_getpwuid(posix_geteuid())['name'] ?? '');
+        }
+
+        return (string) (getenv('USERNAME') ?: getenv('USER') ?: '');
     }
 
     /** @param array<string, mixed> $details @return array<string, mixed> */

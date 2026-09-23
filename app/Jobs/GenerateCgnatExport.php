@@ -45,7 +45,7 @@ class GenerateCgnatExport implements ShouldQueue
         $csvPath = $directory.'/'.$csvFilename;
         $zipPath = $directory.'/'.$zipFilename;
         $tasks->update($this->taskId, $this->username, 'running', $this->totalRows, 0);
-        $audit->record('export.started', 'success', $this->username, resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
+        $audit->record('export.started', 'pending', $this->username, resourceType: 'export_task', resourceId: $this->taskId, totalRows: $this->totalRows);
 
         $processedRows = 0;
 

@@ -331,6 +331,31 @@ estado con `argMax`, por lo que no depende de que ocurra una compactación.
 
 ## Auditoría del portal
 
+Antes de publicar esta versión en una instalación existente, aplicar la ampliación
+del esquema (el `CREATE TABLE IF NOT EXISTS` original no altera tablas ya creadas):
+
+```bash
+ch_query --multiquery < deploy/clickhouse/upgrade_session_audit.sql
+```
+
+El inicio de sesión único usa el bloqueo distribuido del `CACHE_STORE=redis` y
+`portal_cgnat.user_sessions` en ClickHouse. El segundo navegador muestra un
+diálogo de Bootstrap para cancelar o cerrar la sesión anterior. El navegador
+anterior pierde acceso en su siguiente solicitud. La inactividad se calcula con
+`SESSION_LIFETIME`; un cierre inesperado aparece desconectado al vencer ese plazo.
+Todas las instancias del portal deben usar el mismo Redis y ClickHouse.
+
+Para obtener el estado actual de todos los usuarios, ejecutar:
+
+```bash
+ch_query < /index2/portal-cgnat/current/deploy/clickhouse/reporte_usuarios_estado.sql
+```
+
+Las doce columnas de auditoría también están disponibles mediante
+`deploy/clickhouse/reporte_auditoria.sql`. `Source Hostname` se informa cuando el
+servidor recibe `REMOTE_HOST`; de lo contrario se muestra vacío porque el
+navegador no comunica de forma fiable el nombre de su estación.
+
 La auditoría registra los accesos LDAP, denegaciones por rol, consultas CGNAT,
 exportaciones y plantillas. Nunca almacena contraseñas, cookies, tokens ni la
 lista completa de grupos LDAP. `query_audit` contiene los filtros técnicos de

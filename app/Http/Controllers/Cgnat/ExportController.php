@@ -38,7 +38,7 @@ class ExportController extends Controller
             $taskId = $tasks->create($username, $search, $exportRows);
             GenerateCgnatExport::dispatch($taskId, $username, $search->toArray(), $exportRows, $limitedPerNode);
 
-            $audit->record('export.queued', 'success', $username, $request, [
+            $audit->record('export.queued', 'pending', $username, $request, [
                 'selected_nodes' => $search->nodes,
                 'query_total_rows' => $totalFound,
                 'export_rows' => $exportRows,

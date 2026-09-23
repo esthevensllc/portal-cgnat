@@ -24,6 +24,7 @@ class AuditEventRepository
                 $conditions[] = match ($field) {
                     'username' => 'positionCaseInsensitive(username, {username:String}) > 0',
                     'request_id' => 'request_id = {request_id:UUID}',
+                    'outcome' => "multiIf(outcome IN ('success', 'Correcto'), 'Correcto', outcome IN ('pending', 'Pendiente'), 'Pendiente', 'Fallido') = {outcome:String}",
                     default => "{$field} = {{$field}:String}",
                 };
                 $parameters['param_'.$field] = (string) $filters[$field];
@@ -31,9 +32,10 @@ class AuditEventRepository
         }
 
         return $this->store->select(sprintf(<<<'SQL'
-SELECT occurred_at, event_id, request_id, event_type, outcome, username,
-       source_ip, http_method, route_name, resource_type, resource_id,
-       elapsed_ms, total_rows, details_json
+SELECT occurred_at, event_id, request_id, event_type,
+       multiIf(outcome IN ('success', 'Correcto'), 'Correcto', outcome IN ('pending', 'Pendiente'), 'Pendiente', 'Fallido') AS event_status,
+       username, user_description, source_ip, source_hostname,
+       destination_ip, destination_hostname, os_username, details_json
 FROM portal_cgnat.audit_events
 WHERE %s
 ORDER BY occurred_at DESC, event_id DESC

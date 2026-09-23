@@ -18,6 +18,8 @@ Route::prefix('portalcgnat')->group(function (): void {
 
     Route::get('/login', [PortalLoginController::class, 'show'])->name('portal.login');
     Route::post('/login', [PortalLoginController::class, 'login'])->name('portal.login.submit');
+    Route::post('/login/cerrar-otras-sesiones', [PortalLoginController::class, 'replace'])->name('portal.login.replace');
+    Route::post('/login/cancelar', [PortalLoginController::class, 'cancel'])->name('portal.login.cancel');
 
     Route::middleware('portal.auth:cgnat.query')->group(function (): void {
         Route::get('/consultas', [QueryController::class, 'index'])->name('queries.index');
