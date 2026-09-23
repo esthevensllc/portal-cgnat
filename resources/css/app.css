@@ -294,7 +294,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .login-page { display: grid; min-height: 100vh; place-items: center; padding: 20px; background: #eef1f4; }
 .login-card { width: min(100%, 475px); padding: 76px 56px 56px; border: 1px solid #d3d8de; border-top: 3px solid var(--brand); border-radius: 6px; background: white; box-shadow: 0 2px 3px rgba(34, 47, 62, .22); }
 .login-card h1 { margin: 0; color: #354052; text-align: center; font-size: 24px; font-weight: 800; letter-spacing: .04em; }.login-card__subtitle { margin: 8px 0 40px; color: #748092; text-align: center; }.login-card .field { margin-bottom: 9px; }.login-card .control { min-height: 58px; border-radius: 3px; padding-inline: 13px; }.login-card__submit { width: 100%; min-height: 39px; margin-top: 39px; border-radius: 5px; }.password-field { position: relative; }.password-field .control { padding-right: 46px; }.password-toggle { position: absolute; top: 0; right: 0; width: 45px; height: 58px; border: 0; color: #6c7480; background: transparent; cursor: pointer; }.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
-.login-page .modal { display: none; padding: 0; }
+.login-page .modal { display: none; padding: 0; z-index: 1060; }
 .login-page .modal.show { display: block; }
 .login-page .modal-content { border-top: 3px solid var(--brand); }
 .login-page .modal-footer { gap: 10px; }
