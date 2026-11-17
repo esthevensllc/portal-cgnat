@@ -47,18 +47,22 @@ El fallback del código sigue siendo cuatro para conservar instalaciones que no
 declaren esa variable; ambos archivos de ejemplo declaran siete y mantienen
 `CLICKHOUSE_ENABLED=false` hasta completar los datos.
 
-Faltan estos valores para **cada** nuevo colector (`ch05`, `ch06`, `ch07`):
+Los tres nuevos colectores quedan asignados así:
 
-| Variable `CLICKHOUSE_CHxx_…` | Dato por confirmar |
-|---|---|
-| `URL` | Esquema HTTP/HTTPS, IP o DNS y puerto reales, accesibles desde los contenedores |
-| `USERNAME`, `PASSWORD` | Cuenta de runtime y secreto, con `SELECT` en las tablas CGNAT |
-| `DATABASE` | Confirmar `cgnat` o indicar la base real |
-| `TABLE_PATTERN` | Confirmar `huawei_cgn_nat_v2_%s` (fecha `YYYY_MM_DD`) y columnas compatibles |
-| `VERIFY_TLS` | Confirmar TLS y confianza de la CA; los ejemplos nuevos usan `true` |
+| Nodo | Servidor / etiqueta | URL |
+|---|---|---|
+| `ch05` | `TRJELOGF01` | `http://10.96.167.180:8123` |
+| `ch06` | `TRJELOGF02` | `http://10.96.167.181:8123` |
+| `ch07` | `LORELOGF01` | `http://10.96.167.196:8123` |
 
-Las URL y credenciales de CH-05 a CH-07 se dejan vacías intencionalmente. No
-habilitar la lista de siete hasta recibir y comprobar esos datos. Un nodo sin
+Se confirmó que comparten la conexión, esquema y tablas de los cuatro actuales:
+HTTP por 8123, `DATABASE=cgnat`,
+`TABLE_PATTERN=huawei_cgn_nat_v2_%s` (fecha `YYYY_MM_DD`) y `VERIFY_TLS=false`.
+Los ejemplos usan `USERNAME=portal_cgnat`; en el servidor, copiar el usuario y
+contraseña efectivos de uno de los cuatro colectores actuales a CH05/CH06/CH07,
+conservando su formato y comillas. Las contraseñas de los ejemplos permanecen
+vacías; no versionar secretos. Comprobar acceso `SELECT` con esa cuenta en los
+tres nuevos antes de habilitar la lista de siete. Un nodo sin
 URL o inaccesible provoca error; no se omite silenciosamente para presentar un
 resultado incompleto. Si un colector no tiene las tablas diarias del rango,
 también se rechaza la consulta. Confirmar retención y fechas disponibles en los
@@ -97,7 +101,7 @@ ClickHouse; empezar con 3 y ajustar solo después de medir en la prueba autoriza
 
 La siguiente es la **única secuencia operativa de esta ampliación** para una
 instalación Quadlet existente. Ejecutarla en el entorno autorizado como root,
-después de recibir los datos anteriores. No ejecutar los pasos de instalación
+con las credenciales actuales disponibles. No ejecutar los pasos de instalación
 desde cero para este cambio. No copiar el ejemplo completo sobre `portal.env`:
 conservar los cuatro nodos, `APP_KEY`, LDAP y `PORTAL_STORE_*` existentes.
 
@@ -112,8 +116,9 @@ printf 'Respaldo para reversión: %s\n' "$backup"
 
 # Revisar las tareas en el portal; continuar solo con la cola drenada.
 podman exec portal-worker php artisan queue:monitor redis:default --max=0
-# Editar solo CLICKHOUSE_NODES, añadir CH05/CH06/CH07 completos desde
-# deploy/portal.env.example y fijar REDIS_QUEUE_RETRY_AFTER=3660.
+# Editar solo CLICKHOUSE_NODES, añadir CH05/CH06/CH07 desde
+# deploy/portal.env.example, copiar USERNAME/PASSWORD efectivos de un colector
+# actual a los tres nuevos y fijar REDIS_QUEUE_RETRY_AFTER=3660.
 # Lista final: ch01,ch02,ch03,ch04,ch05,ch06,ch07 (sin duplicados).
 vi "$root/config/portal.env"
 chmod 0600 "$root/config/portal.env"
