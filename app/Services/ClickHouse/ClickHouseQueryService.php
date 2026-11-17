@@ -467,77 +467,164 @@ SQL;
             throw new RuntimeException('No fue posible crear el archivo CSV.');
         }
 
-        try {
-            foreach ($nodes as $name => $node) {
-                $expectedNodeRows = max(0, (int) ($perNode[$name] ?? 0));
-                $nodeRows = 0;
+        $temporaryPaths = [];
+        $nodeStreams = [];
+        $success = false;
+        $concurrency = min(
+            count($nodes),
+            max(1, min(7, (int) config('clickhouse.export_concurrency', 3))),
+        );
 
-                if ($expectedNodeRows === 0) {
-                    continue;
+        try {
+            foreach (array_chunk($nodes, $concurrency, true) as $batch) {
+                $batchRows = array_fill_keys(array_keys($batch), 0);
+                $batchHeaders = array_fill_keys(array_keys($batch), false);
+                $batchSpools = [];
+
+                foreach ($batch as $name => $node) {
+                    $spool = $destination.'.'.$name.'.node.part';
+                    @unlink($spool);
+                    $stream = fopen($spool, 'wb');
+
+                    if ($stream === false) {
+                        throw new RuntimeException('No fue posible crear un temporal de exportación.');
+                    }
+
+                    $nodeStreams[$name] = $stream;
+                    $batchSpools[$name] = $spool;
+                    $temporaryPaths[] = $spool;
                 }
 
-                $tables = array_reverse(array_keys($this->expectedTables($search, $node)));
+                for ($day = $search->to->startOfDay(); $day >= $search->from->startOfDay(); $day = $day->subDay()) {
+                    $parts = [];
+                    $responses = Http::pool(function (Pool $pool) use (
+                        $batch,
+                        $batchRows,
+                        $batchHeaders,
+                        $day,
+                        $destination,
+                        $parameters,
+                        $perNode,
+                        $sql,
+                        &$parts,
+                        &$temporaryPaths,
+                    ): array {
+                        $requests = [];
 
-                foreach ($tables as $table) {
-                    $remainingNodeRows = $expectedNodeRows - $nodeRows;
-                    if ($remainingNodeRows <= 0) {
+                        foreach ($batch as $name => $node) {
+                            $expectedNodeRows = max(0, (int) ($perNode[$name] ?? 0));
+                            $remainingNodeRows = $expectedNodeRows - $batchRows[$name];
+
+                            if ($remainingNodeRows <= 0) {
+                                continue;
+                            }
+
+                            $table = sprintf((string) $node['table_pattern'], $day->format('Y_m_d'));
+                            $part = $destination.'.'.$name.'.'.$table.'.part';
+                            @unlink($part);
+                            $parts[$name] = $part;
+                            $temporaryPaths[] = $part;
+
+                            $format = $batchHeaders[$name] ? 'CSV' : 'CSVWithNames';
+                            $query = str_replace(
+                                ['__LIMIT__', '__FORMAT__'],
+                                [(string) $remainingNodeRows, $format],
+                                $sql,
+                            );
+
+                            $requests[$name] = $pool->as($name)
+                                ->sink($part)
+                                ->withBasicAuth((string) $node['username'], (string) $node['password'])
+                                ->connectTimeout((int) config('clickhouse.connect_timeout', 3))
+                                ->timeout((int) config('clickhouse.export_timeout', 3600))
+                                ->withOptions([
+                                    'verify' => (bool) $node['verify_tls'],
+                                    'query' => [
+                                        ...$parameters,
+                                        'database' => $node['database'],
+                                        'query_id' => (string) Str::uuid(),
+                                    ],
+                                ])
+                                ->withBody($this->applySingleTable($query, $node, $table), 'text/plain')
+                                ->post(rtrim((string) $node['url'], '/').'/');
+                        }
+
+                        return $requests;
+                    });
+
+                    if ($parts === []) {
                         break;
                     }
 
-                    $part = $destination.'.'.$name.'.'.$table.'.part';
+                    foreach ($batch as $name => $node) {
+                        if (! isset($parts[$name])) {
+                            continue;
+                        }
 
-                    try {
-                        $format = $headerWritten ? 'CSV' : 'CSVWithNames';
-                        $query = str_replace(
-                            ['__LIMIT__', '__FORMAT__'],
-                            [(string) $remainingNodeRows, $format],
-                            $sql,
-                        );
+                        $response = $responses[$name] ?? null;
+                        if ($response instanceof ConnectionException) {
+                            $failure = $this->connectionFailure($name, $node, $response);
+                            throw new RuntimeException(
+                                'No fue posible exportar el nodo '.$node['label'].': '.$failure['message'],
+                                previous: $response,
+                            );
+                        }
 
-                        $response = Http::sink($part)
-                            ->withBasicAuth((string) $node['username'], (string) $node['password'])
-                            ->connectTimeout((int) config('clickhouse.connect_timeout', 3))
-                            ->timeout((int) config('clickhouse.export_timeout', 3600))
-                            ->withOptions([
-                                'verify' => (bool) $node['verify_tls'],
-                                'query' => [
-                                    ...$parameters,
-                                    'database' => $node['database'],
-                                    'query_id' => (string) Str::uuid(),
-                                ],
-                            ])
-                            ->withBody($this->applySingleTable($query, $node, $table), 'text/plain')
-                            ->post(rtrim((string) $node['url'], '/').'/');
-
-                        if (! $response->successful()) {
+                        if (! $response instanceof Response || ! $response->successful()) {
                             throw new RuntimeException(
                                 'No fue posible exportar el nodo '.$node['label'].': '.$this->responseError($response)
                             );
                         }
 
                         $partRows = $this->appendCsvPart(
-                            $part,
-                            $output,
-                            ! $headerWritten,
+                            $parts[$name],
+                            $nodeStreams[$name],
+                            ! $batchHeaders[$name],
                             (string) $node['label'],
                         );
+                        $batchHeaders[$name] = true;
+                        $batchRows[$name] += $partRows;
 
-                        $headerWritten = true;
-                        $nodeRows += $partRows;
+                        if ($batchRows[$name] > max(0, (int) ($perNode[$name] ?? 0))) {
+                            throw new RuntimeException('ClickHouse devolvió más registros de los esperados para '.$node['label'].'.');
+                        }
+
                         $completed += $partRows;
                         $progress($completed);
-                    } finally {
-                        @unlink($part);
+                        @unlink($parts[$name]);
                     }
                 }
 
-                if ($nodeRows < $expectedNodeRows) {
-                    throw new RuntimeException(sprintf(
-                        'La exportación del nodo %s quedó incompleta: se esperaban %s registros y se escribieron %s.',
-                        (string) $node['label'],
-                        number_format($expectedNodeRows, 0, '.', ','),
-                        number_format($nodeRows, 0, '.', ','),
-                    ));
+                foreach ($batch as $name => $node) {
+                    $expectedNodeRows = max(0, (int) ($perNode[$name] ?? 0));
+                    if ($batchRows[$name] !== $expectedNodeRows) {
+                        throw new RuntimeException(sprintf(
+                            'La exportación del nodo %s quedó incompleta: se esperaban %s registros y se escribieron %s.',
+                            (string) $node['label'],
+                            number_format($expectedNodeRows, 0, '.', ','),
+                            number_format($batchRows[$name], 0, '.', ','),
+                        ));
+                    }
+
+                    fclose($nodeStreams[$name]);
+                    unset($nodeStreams[$name]);
+
+                    if ($batchRows[$name] > 0) {
+                        $mergedRows = $this->appendCsvPart(
+                            $batchSpools[$name],
+                            $output,
+                            $headerWritten,
+                            (string) $node['label'],
+                        );
+
+                        if ($mergedRows !== $batchRows[$name]) {
+                            throw new RuntimeException('La combinación del CSV no coincide con el conteo exportado para '.$node['label'].'.');
+                        }
+
+                        $headerWritten = true;
+                    }
+
+                    @unlink($batchSpools[$name]);
                 }
             }
 
@@ -549,9 +636,25 @@ SQL;
                 ));
             }
 
+            $success = true;
+
             return $completed;
         } finally {
+            foreach ($nodeStreams as $stream) {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+
             fclose($output);
+
+            foreach ($temporaryPaths as $path) {
+                @unlink($path);
+            }
+
+            if (! $success) {
+                @unlink($destination);
+            }
         }
     }
 

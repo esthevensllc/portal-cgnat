@@ -32,5 +32,6 @@ return [
     'page_size' => (int) env('CLICKHOUSE_PAGE_SIZE', 100),
     'export_threshold' => (int) env('CLICKHOUSE_EXPORT_THRESHOLD', 100000),
     'export_max_rows' => max(1, (int) env('CLICKHOUSE_EXPORT_MAX_ROWS', 60000000)),
+    'export_concurrency' => max(1, min(7, (int) env('CLICKHOUSE_EXPORT_CONCURRENCY', 3))),
     'nodes' => $nodes,
 ];

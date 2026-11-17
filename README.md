@@ -1,7 +1,7 @@
 # Portal CGNAT
 
-Portal interno Laravel para consultar sesiones IPv4 PAT en los cuatro nodos
-ClickHouse. Usa el diseño visual de los portales internos existentes y no
+Portal interno Laravel para consultar sesiones IPv4 PAT en los nodos
+ClickHouse configurados (ampliación prevista de cuatro a siete). Usa el diseño visual de los portales internos existentes y no
 recarga la página al ejecutar una consulta.
 
 ## Arquitectura
@@ -37,6 +37,180 @@ El portal admite únicamente dos roles: `cgnat_basico` para los usuarios finales
 y `cgnat_administrador` para la administración completa, incluida la auditoría.
 La autenticación LDAP por sí sola no otorga acceso: cada usuario debe ser
 aprovisionado en ClickHouse.
+
+## Ampliar de cuatro a siete colectores (runbook)
+
+La ampliación es de configuración: `config/clickhouse.php` construye los nodos
+desde `CLICKHOUSE_NODES`. No hay un máximo de cuatro en el selector, la
+validación, el conteo, la combinación/paginación de resultados ni la exportación.
+El fallback del código sigue siendo cuatro para conservar instalaciones que no
+declaren esa variable; ambos archivos de ejemplo declaran siete y mantienen
+`CLICKHOUSE_ENABLED=false` hasta completar los datos.
+
+Faltan estos valores para **cada** nuevo colector (`ch05`, `ch06`, `ch07`):
+
+| Variable `CLICKHOUSE_CHxx_…` | Dato por confirmar |
+|---|---|
+| `URL` | Esquema HTTP/HTTPS, IP o DNS y puerto reales, accesibles desde los contenedores |
+| `USERNAME`, `PASSWORD` | Cuenta de runtime y secreto, con `SELECT` en las tablas CGNAT |
+| `DATABASE` | Confirmar `cgnat` o indicar la base real |
+| `TABLE_PATTERN` | Confirmar `huawei_cgn_nat_v2_%s` (fecha `YYYY_MM_DD`) y columnas compatibles |
+| `VERIFY_TLS` | Confirmar TLS y confianza de la CA; los ejemplos nuevos usan `true` |
+
+Las URL y credenciales de CH-05 a CH-07 se dejan vacías intencionalmente. No
+habilitar la lista de siete hasta recibir y comprobar esos datos. Un nodo sin
+URL o inaccesible provoca error; no se omite silenciosamente para presentar un
+resultado incompleto. Si un colector no tiene las tablas diarias del rango,
+también se rechaza la consulta. Confirmar retención y fechas disponibles en los
+siete; no se deduplican registros repetidos entre colectores.
+
+`cgnat_basico` consulta y exporta en todos los nodos configurados, incluso si
+envía manualmente un subconjunto. `cgnat_administrador`, con `cgnat.nodes`, ve
+los siete y puede elegir un subconjunto. Las plantillas administrativas que ya
+guardaban cuatro nodos conservan esa selección: revisarlas si deben incluir los
+nuevos. No hacen falta cambios de roles ni DDL por añadir colectores.
+`PORTAL_STORE_*` es independiente: conservar su servidor, usuarios y auditoría;
+no copiar `portal_cgnat` a los nuevos colectores para esta ampliación.
+
+App, worker y scheduler leen el mismo `EnvironmentFile` de Quadlet. No requiere
+reconstruir imágenes, reinstalar Quadlets ni reiniciar/borrar Redis. Los jobs
+ya encolados conservan su lista original de nodos. Antes de aplicar o revertir,
+esperar a que terminen las exportaciones y suspender nuevas solicitudes durante
+la ventana de mantenimiento. El límite global de filas se reparte siguiendo
+el orden de los nodos. Siete
+colectores pueden aumentar duración, disco y carga. El job y el worker Quadlet
+tienen timeout de 3600 s para toda la tarea, mientras
+`CLICKHOUSE_EXPORT_TIMEOUT` se aplica por solicitud HTTP. Validar una exportación
+representativa antes de asumir capacidad productiva. Configurar
+`REDIS_QUEUE_RETRY_AFTER=3660` (superior a 3600 s) evita que Redis vuelva a ofrecer
+un job todavía en ejecución; el fallback actual de la cola es 90 s.
+
+Las exportaciones descargan hasta `CLICKHOUSE_EXPORT_CONCURRENCY` colectores en
+paralelo (predeterminado 3, máximo 7); cada colector procesa sus tablas diarias
+en secuencia. Cada nodo escribe primero en su propio temporal y el worker los
+combina en el CSV final por orden de nodo, con una sola cabecera. El progreso se
+actualiza al completar cada tabla. Durante cada grupo se requiere espacio libre
+para el CSV final y los temporales de hasta tres nodos; los temporales se borran
+al combinarse o si la tarea falla. Reducir la variable a 1 vuelve al
+comportamiento serial. El paralelismo puede aumentar la carga de lectura en
+ClickHouse; empezar con 3 y ajustar solo después de medir en la prueba autorizada.
+
+La siguiente es la **única secuencia operativa de esta ampliación** para una
+instalación Quadlet existente. Ejecutarla en el entorno autorizado como root,
+después de recibir los datos anteriores. No ejecutar los pasos de instalación
+desde cero para este cambio. No copiar el ejemplo completo sobre `portal.env`:
+conservar los cuatro nodos, `APP_KEY`, LDAP y `PORTAL_STORE_*` existentes.
+
+```bash
+set -Eeuo pipefail
+root=/index2/portal-cgnat
+umask 077
+install -d -m 0700 "$root/backups"
+backup="$root/backups/portal.env-before-seven-$(date +%Y%m%d-%H%M%S)"
+cp -p "$root/config/portal.env" "$backup"
+printf 'Respaldo para reversión: %s\n' "$backup"
+
+# Revisar las tareas en el portal; continuar solo con la cola drenada.
+podman exec portal-worker php artisan queue:monitor redis:default --max=0
+# Editar solo CLICKHOUSE_NODES, añadir CH05/CH06/CH07 completos desde
+# deploy/portal.env.example y fijar REDIS_QUEUE_RETRY_AFTER=3660.
+# Lista final: ch01,ch02,ch03,ch04,ch05,ch06,ch07 (sin duplicados).
+vi "$root/config/portal.env"
+chmod 0600 "$root/config/portal.env"
+
+aplicar_configuracion() {
+  systemctl stop portal-worker portal-scheduler
+  podman exec portal-app php artisan config:clear
+  systemctl restart portal-app
+  systemctl start portal-worker portal-scheduler
+  systemctl restart portal-nginx
+}
+aplicar_configuracion
+
+# Comprobar la configuración efectiva de los tres procesos sin imprimir secretos.
+for container in portal-app portal-worker portal-scheduler; do
+  printf '%s: ' "$container"
+  podman exec -i "$container" php <<'PHP'
+<?php
+require '/var/www/html/vendor/autoload.php';
+$app = require '/var/www/html/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$nodes = config('clickhouse.nodes', []);
+$expected = ['ch01', 'ch02', 'ch03', 'ch04', 'ch05', 'ch06', 'ch07'];
+if (!config('clickhouse.enabled') || array_keys($nodes) !== $expected
+    || config('queue.default') !== 'redis'
+    || config('queue.connections.redis.retry_after') <= 3600) {
+    fwrite(STDERR, "Configuración no válida; revisar lista, habilitación y cola.\n");
+    exit(1);
+}
+foreach ($nodes as $name => $node) {
+    if (blank($node['url']) || blank($node['username']) || blank($node['password'])) {
+        fwrite(STDERR, "$name: faltan datos de conexión.\n");
+        exit(1);
+    }
+}
+echo implode(',', array_keys($nodes))." OK\n";
+PHP
+done
+
+# Usar un día confirmado con tablas en los siete colectores.
+read -r -p 'Fecha de prueba (YYYY_MM_DD): ' fecha
+podman exec -i -e CGNAT_CHECK_DATE="$fecha" portal-app php <<'PHP'
+<?php
+require '/var/www/html/vendor/autoload.php';
+$app = require '/var/www/html/bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+$date = getenv('CGNAT_CHECK_DATE');
+if (!preg_match('/^\d{4}_\d{2}_\d{2}$/', $date)) exit(1);
+$failed = false;
+foreach (config('clickhouse.nodes', []) as $name => $node) {
+    try {
+        $db = $node['database'];
+        $table = sprintf($node['table_pattern'], $date);
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $db)
+            || !preg_match('/^[A-Za-z0-9_]+$/', $table)) throw new RuntimeException();
+        // Comprueba autenticación, permiso SELECT y columnas sin leer registros.
+        $sql = "SELECT start_time, end_time, "
+            ."router_ip, router_port, private_ip, private_port, public_ip, "
+            ."public_port, destination_ip, destination_port, packet_size "
+            ."FROM `$db`.`$table` LIMIT 0 FORMAT JSONEachRow";
+        $response = Illuminate\Support\Facades\Http::withBasicAuth($node['username'], $node['password'])
+            ->connectTimeout(3)->timeout(15)->withOptions(['verify' => $node['verify_tls']])
+            ->withBody($sql, 'text/plain')->post(rtrim($node['url'], '/').'/');
+        if (!$response->successful()) throw new RuntimeException();
+        echo "$name: SELECT OK\n";
+    } catch (Throwable $error) {
+        $failed = true;
+        echo "$name: FALLÓ; revisar red, TLS, cuenta y tabla del día.\n";
+    }
+}
+exit($failed ? 1 : 0);
+PHP
+systemctl status portal-redis portal-app portal-worker portal-scheduler portal-nginx --no-pager
+curl -fsS http://127.0.0.1:8080/health/live
+journalctl -u portal-app -u portal-worker -u portal-scheduler -n 100 --no-pager
+
+# Validación funcional: iniciar sesión con básico y administrador; consultar un
+# rango conocido en los siete, elegir CH05-CH07 como admin, generar y descargar
+# un ZIP y revisar auditoría/estado de la tarea. /health/live solo prueba HTTP.
+
+# Solo si las comprobaciones fallan: en esta misma sesión, drenar de nuevo las
+# tareas y revertir la configuración con la copia protegida (no borrar Redis).
+# cp -p "$backup" "$root/config/portal.env"
+# aplicar_configuracion
+```
+
+Si un error cerró la sesión por `set -e`, recuperar la ruta del respaldo
+mostrada, definir de nuevo `root`, `backup` y la función `aplicar_configuracion`
+del mismo bloque, y ejecutar las dos líneas de reversión. No volver a crear el
+respaldo sobre la configuración fallida.
+
+La prueba automatizada específica es `tests/Feature/SevenCollectorTest.php`;
+ejecutar `php artisan test --filter=SevenCollectorTest` con PHP 8.5 y dependencias
+de desarrollo. Usa HTTP simulado y comprueba los permisos de selección,
+conteo/mezcla de siete nodos, rechazo de nodos desconocidos o fallidos y la
+exportación paralela/serialización de los siete. No acredita conectividad ni rendimiento
+de servidores reales.
 
 ## Versiones fijadas
 
@@ -90,7 +264,7 @@ producción:
   `389` o por el puerto acordado con infraestructura.
 - La red permite a los usuarios llegar al puerto TCP `8080` del portal (o al
   puerto que se publicará detrás del proxy productivo).
-- Existe una cuenta ClickHouse de runtime con permisos para las cuatro fuentes
+- Existe una cuenta ClickHouse de runtime con permisos para todas las fuentes
   `cgnat.*` y para el nodo que almacenará `portal_cgnat`.
 
 Comandos de verificación, sin exponer contraseñas:
@@ -199,9 +373,10 @@ SESSION_DRIVER=redis
 QUEUE_CONNECTION=redis
 QUEUE_FAILED_DRIVER=null
 REDIS_HOST=portal-redis
+REDIS_QUEUE_RETRY_AFTER=3660
 
 CLICKHOUSE_ENABLED=true
-CLICKHOUSE_NODES=ch01,ch02,ch03,ch04
+CLICKHOUSE_NODES=ch01,ch02,ch03,ch04,ch05,ch06,ch07
 CLICKHOUSE_CH01_LABEL=CH-01
 CLICKHOUSE_CH01_URL=http://IP_CH01:8123
 CLICKHOUSE_CH01_USERNAME=portal_cgnat
@@ -210,7 +385,8 @@ CLICKHOUSE_CH01_DATABASE=cgnat
 CLICKHOUSE_CH01_TABLE_PATTERN=huawei_cgn_nat_v2_%s
 CLICKHOUSE_CH01_VERIFY_TLS=false
 
-# Repetir estos parámetros para CH02 y CH03.
+# Repetir estos parámetros para CH02, CH03 y CH05 a CH07 con sus datos reales.
+# Los bloques completos de siete nodos están en deploy/portal.env.example.
 CLICKHOUSE_CH04_LABEL=CH-04
 CLICKHOUSE_CH04_URL=http://IP_CH04:8123
 CLICKHOUSE_CH04_USERNAME=portal_cgnat
@@ -386,7 +562,7 @@ Orden final de instalación desde cero:
 
 1. Preparar `/index2` y el `graphroot` de Podman.
 2. Transferir y validar los artefactos; cargar imágenes e instalar el release.
-3. Crear `config/portal.env` con `APP_KEY`, los cuatro nodos, la cuenta
+3. Crear `config/portal.env` con `APP_KEY`, los nodos confirmados, la cuenta
    restringida ClickHouse y la conexión LDAP.
 4. Crear `portal_cgnat` en `PORTAL_STORE_URL` y aprovisionar al menos
    un usuario AD con `cgnat_basico`.

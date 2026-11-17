@@ -1,11 +1,7 @@
 <?php
 
 return [
-    // El nodo debe existir también en CLICKHOUSE_NODES.
-    // 'node' => env('PORTAL_STORE_NODE', 'ch04'),
-    // 'database' => env('PORTAL_STORE_DATABASE', 'portal_cgnat'),
-    // 'connect_timeout' => (int) env('PORTAL_STORE_CONNECT_TIMEOUT', 3),
-    // 'query_timeout' => (int) env('PORTAL_STORE_QUERY_TIMEOUT', 10),
+    // Persistencia del portal independiente de los colectores CLICKHOUSE_NODES.
     'url' => env('PORTAL_STORE_URL'),
     'username' => env('PORTAL_STORE_USERNAME'),
     'password' => env('PORTAL_STORE_PASSWORD'),
